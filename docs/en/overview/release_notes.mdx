@@ -1,0 +1,21 @@
+---
+weight: 40
+---
+
+# Release Notes
+
+## v1.2.0
+
+### Features and Enhancements
+
+- Default using RAG chain to answer user questions, improving answer accuracy.
+- Support importing database dump to initialize knowledge base, simplifying the setup process.
+- **Experimental:** Support enabling Agent mode to leverage MCP tools to retrieve real-time cluster information.
+- Support connecting to PGVector database deployed outside the Alauda Hyperflux installation.
+- Support Cohere Reranker model to improve answer relevance.
+- Support setting RAG chain parameters such as total_search_k etc.
+
+
+### Known Issues
+
+- When LLM returns errors, the answer generation may fail. When come back to view the chat history, will send the question again to LLM, causing duplicated conversations.
