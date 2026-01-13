@@ -11,7 +11,7 @@ Follow below steps in Alauda AI to setup a rerank model using vLLM:
 3. **Do not** click "Publish" yet. Click the YAML button in the upper right corner to switch to YAML editing mode.
 4. Modify the `spec.model.command` section in the YAML file as follows (note that you only need to delete the original `python3` startup part and replace it with the `vllm serve` startup command below; the preceding script does not need to be modified):
 5. After the rerank model starts, ensure that the model's API address is accessible by the global cluster (the cluster where Hyperflux is deployed). If it's across clusters, you need to configure it as NodePort, Ingress, or AI Gateway, etc.
-6. Modify the Hyperflux configuration items: change Cohere Reranker BaseUrl to the access address of the inference service mentioned above, change Cohere Reranker Model to the model name (usually the model name in the model repository), and Cohere Reranker API key (fill in anything; vLLM does not set this by default).
+6. Modify the Hyperflux configuration items: change Cohere Reranker BaseUrl to the access address of the inference service mentioned above, change Cohere Reranker Model to the model name (usually the name of the created `InferenceService`), and Cohere Reranker API key (fill in anything; vLLM does not set this by default).
 7. After the smart-doc container restarts successfully, the process is complete.
 
 Sample vLLM startup command:
