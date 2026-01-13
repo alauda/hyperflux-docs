@@ -1,0 +1,63 @@
+---
+weight: 20
+---
+
+# Upgrade
+
+This document will provide instructions for upgrading Alauda Hyperflux to a newer version.
+
+## Prepare for upgrade
+
+Before upgrading, please make sure to back up your existing knowledge base and configuration data to prevent any data loss during the upgrade process.
+
+> **NOTE:** Upgrading from v1.2.0 to v1.2.1 may cause knowledge base to be re-initialized. Please make sure to back up your database dump file before upgrading.
+
+Backup steps:
+
+```bash
+# Get the PostgreSQL pod name (if you are using built-in PG database)
+kubectl -n cpaas-system get pod | grep postgre-vec
+# Dump the database to a file
+kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -d <your-database-name> -F c -f /tmp/hyperflux_backup.dump
+# Copy the dump file to local machine
+kubectl -n cpaas-system cp <postgre-vec-xxx>:/tmp/hyperflux_backup.dump ./hyperflux_backup.dump
+```
+
+## Upgrade steps
+
+Upgrading Alauda Hyperflux uses the same process as installing a cluster plugin in ACP:
+
+1. Upload the new version of the plugin package to ACP Marketplace.
+    Upload the new version package in the same way as the initial installation.
+    After the upload is complete, wait for about 10–15 minutes for the platform to automatically synchronize the new version information.
+2. Verify that the new version is available in the Marketplace.
+    Enter **Administrator / Marketplace / Upload Packages** in the console.
+    Switch to the **Cluster Plugin** tab.
+    Confirm that the new version number is displayed in the details of the Hyperflux plugin.
+3. Execute the upgrade operation on the cluster where Hyperflux is installed.
+    Navigate to **Administrator / Clusters / Clusters**.
+    Find the cluster where the Hyperflux plugin is installed, and an upgrade icon will be displayed in the cluster entry.
+    Click to enter the details page of that cluster, and switch to the **Features** tab.
+    On the component card corresponding to the Hyperflux plugin, click the **Upgrade** button.
+    Confirm the upgrade in the pop-up confirmation dialog, and the system will automatically perform the component upgrade operation.
+4. Verify the upgrade result.
+    After the upgrade is complete, check the **Features** tab of the cluster to confirm that the version number of the Hyperflux plugin has been updated.
+    You can verify its normal operation through plugin status monitoring or log checking.
+
+## Post-upgrade steps
+
+Restore the knowledge base if needed:
+
+```bash
+# Get the PostgreSQL pod name (if you are using built-in PG database)
+kubectl -n cpaas-system get pod | grep postgre-vec
+# Copy the backup dump file to the PostgreSQL pod
+kubectl -n cpaas-system cp ./hyperflux_backup.dump <postgre-vec-xxx>:/tmp/hyperflux_backup.dump
+# Restore the database from the dump file
+kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_restore -U postgres -d <your-database-name> /tmp/hyperflux_backup.dump
+# Configure Alauda Hyperflux to use the restored database if needed
+kubectl -n cpaas-system edit configmap smart-doc-config
+# Change the fields `PG_CONN_DB`, `PG_COLLECTION_NAME` to match your restored database and save.
+```
+
+Wait for the Alauda Hyperflux pod to restart and verify that the knowledge base is restored successfully.

@@ -56,14 +56,17 @@ violet push \
     ${VIOLET_EXTRA_ARGS[@]}
 ```
 
-## Prepare your LLM service
+## Prepare your LLM and rerank service
 
 Before installing Alauda Hyperflux, you need to prepare an LLM service for Alauda Hyperflux to use.
 You can use Azure OpenAI service, or deploy an On-Premise LLM service like vllm using Alauda AI.
 
 You will use the LLM service endpoint, model name and API key in the Alauda Hyperflux installation step.
 
-## Prepare the database dump file
+Optionally, if you want to enable the rerank feature in Alauda Hyperflux, you also need to prepare a
+rerank service that supports Cohere Reranker API v2.
+
+## Prepare the database dump file (ONLY needed for v1.2.0)
 
 Download the database dump file like `docvec_acp_4_1.dump` for your current ACP version.
 You **MUST** use the file name like `docvec_acp_4_1` as the database name during installation.
@@ -121,7 +124,7 @@ Fill in the configurations below:
 
 Click **Install** to start installation.
 
-## Import database dump to initialize knowledge base
+## Import database dump to initialize knowledge base (ONLY needed for v1.2.0)
 
 After the Alauda Hyperflux installation is complete, you need to import the database dump file to initialize the knowledge base.
 Use the following command to import the database dump file:
