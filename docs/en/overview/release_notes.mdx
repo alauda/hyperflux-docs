@@ -4,6 +4,26 @@ weight: 40
 
 # Release Notes
 
+## v1.2.1
+
+> NOTE: Agent mode is an experimental feature, please use with caution.
+
+### Bug Fixes
+
+- Fixed an issue where setting the knowledge database name may not work. This fix adds an option
+    to set the database dump file name during installation, and automatically use the specified database dump file
+    to initialize the knowledge base.
+- Fixed an issue where MCP tools can create or delete K8s resources without human confirmation in Agent mode.
+- Fixed an issue when asking for disk space information using Agent mode, the server may get stuck.
+- Fixed an issue when deploying on ACP 4.2 or above, the default node taints are not handled.
+- Fixed a deployment error: `kubeVersion: >=1.20.0 which is incompatible with Kubernetes v1.33.7-1`.
+- Fixed an issue where the API key for LLM service and rerank service appeared in plain text when deploying.
+
+### Improvements
+
+- Improved the prompt for correct Hyperflux identity.
+- Removed not used configuration items in the installation page.
+
 ## v1.2.0
 
 ### Features and Enhancements
