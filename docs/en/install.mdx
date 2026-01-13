@@ -56,12 +56,15 @@ violet push \
     ${VIOLET_EXTRA_ARGS[@]}
 ```
 
-## Prepare your LLM service
+## Prepare your LLM and rerank service
 
 Before installing Alauda Hyperflux, you need to prepare an LLM service for Alauda Hyperflux to use.
 You can use Azure OpenAI service, or deploy an On-Premise LLM service like vllm using Alauda AI.
 
 You will use the LLM service endpoint, model name and API key in the Alauda Hyperflux installation step.
+
+Optionally, you can also deploy a rerank service using Alauda AI to improve the answer quality.
+Checkout [Setup On-Premise Reranker Service](./setup-onprem-reranker.mdx) for detailed instructions.
 
 ## Prepare the database dump file
 
@@ -121,7 +124,7 @@ Fill in the configurations below:
 
 Click **Install** to start installation.
 
-## Import database dump to initialize knowledge base
+## Import database dump to initialize knowledge base (ONLY needed for v1.2.0)
 
 After the Alauda Hyperflux installation is complete, you need to import the database dump file to initialize the knowledge base.
 Use the following command to import the database dump file:
