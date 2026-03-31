@@ -4,6 +4,31 @@ weight: 40
 
 # Release Notes
 
+## v1.3.1
+
+### Features and Enhancements
+
+- Separated databases for system knowledge base, user knowledge base, and chat history to improve data isolation and performance.
+- Redesigned the Smart Doc interaction page for a more intuitive and efficient user experience.
+- Upgraded the MCP server, adding support for OAuth authentication and writable tool configurations.
+- Enhanced file upload integration for a smoother knowledge ingestion process.
+- Added support for IDs in custom elements and resolved related data redundancy issues.
+- Implemented a Redis-based rate limiter to enhance system stability and manage API traffic.
+
+### Improvements
+
+- Optimized the RAG (langchain) and reranking process to significantly improve answer accuracy and relevance.
+- Upgraded the core AI framework to LangChain 1.0 to stay compatible with latest features and optimizations.
+- Added routine system check prompts and performed comprehensive code polishing and unit test linting.
+
+### Bug Fixes
+
+- Fixed an issue where model downloading could fail and improved environment variable configuration for embedding models.
+- Resolved data processing errors occurring during the merging and unpacking of update values.
+- Fixed a bug that caused redundant data prefixes in custom elements.
+- Resolved occasional service call failures to improve overall system reliability.
+
+
 ## v1.2.1
 
 > NOTE: Agent mode is an experimental feature, please use with caution.
