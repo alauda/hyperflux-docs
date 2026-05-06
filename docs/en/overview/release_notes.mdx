@@ -8,18 +8,33 @@ weight: 40
 
 ### Features and Enhancements
 
-- Separated databases for system knowledge base, user knowledge base, and chat history to improve data isolation and performance.
-- Redesigned the Smart Doc interaction page for a more intuitive and efficient user experience.
-- Upgraded the MCP server, adding support for OAuth authentication and writable tool configurations.
-- Enhanced file upload integration for a smoother knowledge ingestion process.
-- Added support for IDs in custom elements and resolved related data redundancy issues.
-- Implemented a Redis-based rate limiter to enhance system stability and manage API traffic.
+#### **BYO Knowledge Tool**
+
+The BYO Knowledge tool allows enterprises to import private knowledge and use it as a dedicated, searchable knowledge source during question answering. This helps teams provide responses based on internal documents, operational knowledge, and organization-specific context.
+
+#### **Multi-Cluster Support**
+
+Multi-cluster support enables users to access information from multiple clusters by cluster name, expanding question-answering capabilities across cluster boundaries. This makes it easier to query and compare resources in different cluster environments.
+
+#### **Token Quota Limits**
+
+Token quota limits allow request frequency and token usage to be restricted by user. This helps administrators control costs, manage quotas, and prevent excessive consumption of model resources.
+
+#### **History**
+
+History support enables users to review previous conversations and question-answering results. This makes it easier to trace context, continue earlier investigations, and troubleshoot issues based on past interactions.
 
 ### Improvements
 
 - Optimized the RAG (langchain) and reranking process to significantly improve answer accuracy and relevance.
 - Upgraded the core AI framework to LangChain 1.0 to stay compatible with latest features and optimizations.
 - Added routine system check prompts and performed comprehensive code polishing and unit test linting.
+- Separated databases for system knowledge base, user knowledge base, and chat history to improve data isolation and performance.
+- Redesigned the Smart Doc interaction page for a more intuitive and efficient user experience.
+- Upgraded the MCP server, adding support for OAuth authentication and writable tool configurations.
+- Enhanced file upload integration for a smoother knowledge ingestion process.
+- Added support for IDs in custom elements and resolved related data redundancy issues.
+- Implemented a Redis-based rate limiter to enhance system stability and manage API traffic.
 
 ### Bug Fixes
 
