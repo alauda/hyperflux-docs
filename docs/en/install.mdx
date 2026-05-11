@@ -59,18 +59,18 @@ violet push \
 ## Prepare your LLM and rerank service
 
 Before installing Alauda Hyperflux, you need to prepare an LLM service for Alauda Hyperflux to use.
-You can use Azure OpenAI service, or deploy an On-Premise LLM service like vllm using Alauda AI.
+You can use Azure OpenAI service, or deploy an On-Premise LLM service like vLLM using Alauda AI.
 
 You will use the LLM service endpoint, model name and API key in the Alauda Hyperflux installation step.
 
 Optionally, if you want to enable the rerank feature in Alauda Hyperflux, you also need to prepare a
-rerank service that supports Cohere Reranker API v2.
+rerank service that supports Cohere Reranker API v2. See [Setup On-Premise Reranker Service](setup-onprem-rerank.mdx)
+for one way to deploy this with Alauda AI + vLLM.
 
-## Prepare the database dump file (ONLY needed for v1.2.0)
-
-Download the database dump file like `docvec_acp_4_1.dump` for your current ACP version.
-You **MUST** use the file name like `docvec_acp_4_1` as the database name during installation.
-
+> **NOTE:** Starting from v1.4.0, the bundled knowledge-base dump file ships inside the plugin package — you no
+> longer need to download it separately, and the manual `pg_restore` step from earlier versions is gone. The init
+> container restores the selected dump on first startup automatically. See [Build a Custom Knowledge Base](build-custom-kb.mdx)
+> if you want to add or replace the bundled corpus with your own internal documentation.
 
 ## Install Alauda Hyperflux cluster plugin
 
@@ -80,13 +80,14 @@ then find the `Alauda Hyperflux` plugin and click **Install**.
 
 > **NOTE:** Alauda Hyperflux **MUST** be installed in the `Global` cluster.
 
-Fill in the configurations below:
+The install form is grouped below by topic. Required fields are marked **(required)**.
 
-- Built-in PG database:
-  - Enabled: will install a single PostgreSQL instance in the cluster for Alauda Hyperflux to use. You need to set:
-    - storage size: the storage size for PostgreSQL data.
-    - storage class name: Kubernetes storage class name, e.g. `sc-topolvm`
-  - Disabled: create a secret below to provide external PostgreSQL connection info.
+### Database
+
+- **Enable builtin PGVector** — when enabled, the chart provisions a single PostgreSQL + ParadeDB instance for Alauda Hyperflux. Set:
+    - **PGVector Storage Size** — the storage size for the PostgreSQL PVC (e.g. `10Gi`).
+    - **PGVector StorageClass name** — the Kubernetes storage class for the PVC, e.g. `sc-topolvm`.
+- When **disabled**, create a `Secret` with the external PostgreSQL connection info instead. Hyperflux uses three logical databases on the same instance — `docvec_sys_kb` (built-in product knowledge base), `docvec_user_kb` (user-uploaded BYO Knowledge), and `docvec_kb` (chat history) — all created automatically by the init container if missing.
     ```yaml
     apiVersion: v1
     kind: Secret
@@ -99,70 +100,87 @@ Fill in the configurations below:
       port: <your-pg-port>
       username: <your-pg-username>
       password: <your-pg-password>
-      uri: "postgresql+pg8000://<your-pg-username>:<your-pg-password>@<your-pg-host>:<your-pg-port>"
+      uri: "postgresql+psycopg://<your-pg-username>:<your-pg-password>@<your-pg-host>:<your-pg-port>"
     ```
-- PG database name: the database name for Alauda Hyperflux to use. **MUST** be the same as the database dump file name without the `.dump` suffix.
-- Node Selector(Optional): set the node selector for Alauda Hyperflux pods if needed.
-- LLM Model Type: Azure or OpenAI.
-- LLM Base URL: the base URL for LLM API calls. When using On-Premise deployment of LLM service like vllm, the url should like `http://<your-vllm-host>:<port>/v1`.
-- Model Name: the model name for LLM API calls.
-- API Key: the API key for LLM API calls.
-- Azure API Version(Optional): when using Azure OpenAI service, set the API version here.
-- Azure Deployment Name(Optional): when using Azure OpenAI service, set the deployment name here.
-- Enable Rerank: whether to enable the rerank feature in Alauda Hyperflux using **Cohere API**. Set below values if enabled:
-  - Cohere Reranker BaseURL: the base URL for Cohere Reranker API calls.
-  - Cohere Reranker Model: the model name for Cohere Reranker API calls.
-  - Cohere API Key: the API key for Cohere Reranker API calls.
-- Enable Agent Mode: whether to enable Agent mode to leverage MCP tools to retrieve real-time cluster information.
-  - **NOTE**: Agent mode is an experimental feature, please use with caution.
-- MCP K8s API Server Address: the K8s API server address of the MCP cluster.
-  - **IMPORTANT:** You should set this url to erebus address like `https://erebus.cpaas-system:443/kubernetes/<cluster-name>`.
-  - **IMPORTANT:** the `cluster-name` should be set to the cluster name you want MCP tools to access.
-- Admin User Names: the comma-separated admin user list. Admin users can manage Audit logs in Alauda Hyperflux.
+    Then enter the secret name in **pg database secret name**.
+- **PG database name** — the chat-history database name (default `docvec`). Created on first start if missing.
+- **PG collection name** — the LangChain PGVector collection name used by the server. The default value matches the bundled gte-multilingual-base dump and **should not be changed** unless you are deploying a custom KB built with [Build a Custom Knowledge Base](build-custom-kb.mdx).
+- **Built-in KnowledgeBase File** — choose which built-in dump to restore on first start:
+    - `docvec_gte_cs2000_<date>.dump` (default) — chunk size 2000, balanced recall and answer focus.
+    - `docvec_gte_cs3000_<date>.dump` — chunk size 3000, slightly better recall on long-form documents at the cost of larger context per hit.
+- **Enable builtin Redis** — when enabled, the chart provisions a single Redis instance used by the rate limiter. When disabled, supply a Redis credentials secret in **redis database secret name**.
 
+### Scheduling
 
+- **Node Selector (optional)** — pin the Hyperflux pods to specific nodes by label. Add one or more rows; different label keys are evaluated with OR.
 
-Click **Install** to start installation.
+### LLM service
 
-## Import database dump to initialize knowledge base (ONLY needed for v1.2.0)
+- **LLM Model type (required)** — `azure` or `openai`.
+- **LLM Base URL (required)** — base URL for LLM API calls. For an on-premise vLLM deployment use `http://<your-vllm-host>:<port>/v1`.
+- **LLM Model Name (required)** — the model name passed in API calls, e.g. `gpt-5-mini` or `qwen2`.
+- **LLM API Key (required)** — the API key for LLM API calls. Stored as an external password.
+- **Azure API Version** — only when **LLM Model type** = `azure`, e.g. `2024-12-01-preview`.
+- **Azure Deployment Name** — only when **LLM Model type** = `azure`, e.g. `o4-mini`.
 
-After the Alauda Hyperflux installation is complete, you need to import the database dump file to initialize the knowledge base.
-Use the following command to import the database dump file:
+### Reranker
 
-```bash
-# Get the PostgreSQL pod name
-kubectl -n cpaas-system get pod | grep postgre-vec
-# Copy the dump file to the PostgreSQL pod
-kubectl -n cpaas-system cp docvec_acp_4_1.dump <postgre-vec-xxx>:/tmp/docvec_acp_4_1.dump
-# Temporarily stop the Alauda Hyperflux deployment to avoid connection issues during database import
-kubectl -n cpaas-system scale deployment smart-doc --replicas=0
-# Exec into the PostgreSQL pod
-kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- /bin/bash
-# Import the database dump file
-# NOTE: change the database name docvec_acp_4_1 to the actual database name
-psql -U postgres -W -c "DROP DATABASE docvec_acp_4_1;"
-psql -U postgres -W -c "CREATE DATABASE docvec_acp_4_1;"
-pg_restore -U postgres -W -d docvec_acp_4_1 /tmp/docvec_acp_4_1.dump
-# Enter the password when prompted
-# Exit the pod
-exit
+- **Enable Reranker (required)** — turn on Cohere-API-compatible reranking. Boosts answer relevance at the cost of one extra service hop. When enabled, set:
+    - **Cohere Reranker BaseUrl** — base URL of the reranker service.
+    - **Cohere Reranker Model** — model name.
+    - **Cohere Reranker API key** — API key (any non-empty value works for vLLM deployments that don't enforce auth).
 
-# Restart the Alauda Hyperflux deployment
-kubectl -n cpaas-system scale deployment smart-doc --replicas=1
-# execute db_orm.py to re-init database schema
-kubectl -n cpaas-system exec -it <smart-doc-xxx> -- python /workspace/db_orm.py
-```
+### Agent Mode
 
-> **NOTE:** when using built-in PostgreSQL database, the default password is `alauda-test`.
+- **Enable Agent Mode (required)** — turn on multi-step reasoning so the agent can call MCP tools. **Recommended:** use a strong LLM (≥ GPT-4 / Qwen-72B class) when this is on; smaller models can loop or misuse tools.
+- **Enable MCP Tools** — load ACP MCP tools so the agent can read live cluster state. Only available when Agent Mode is on.
+- **Expose MCP** — expose the bundled `acp-mcp-server` over Ingress so external MCP clients (e.g. IDE-side coding agents) can reach it. Only available when Agent Mode is on.
 
+> **NOTE:** Earlier versions required setting an "MCP K8s API Server Address" (the `erebus` URL). That field has been
+> removed in v1.4.0 — the bundled `acp-mcp-server` now talks to the cluster directly inside the global cluster, and
+> external traffic is routed through the Ingress.
+
+### Retrieval (RAG) tuning
+
+- **Total Search K (required)** — number of candidates to fetch from the knowledge base before reranking, default `20`.
+- **RAG Similarity Threshold (required)** — minimum cosine similarity for a chunk to be kept, default `0.81`. Lower values trade precision for recall.
+- **Cohere Reranker Top N (required)** — number of top-ranked chunks fed to the LLM after reranking, default `6`. Only applied when reranking is on.
+- **Max History Number (required)** — number of previous turns kept in the prompt, default `1`.
+- **Model Context Window** — total context window of the LLM in tokens (e.g. `128000`). Leave empty to auto-detect by model name; the conversation-history compressor uses this to decide when to summarise older turns.
+
+### Audit and identity
+
+- **Admin Users** — comma-separated list of usernames that can view audit logs in Alauda Hyperflux, e.g. `admin@cpaas.io,admin`.
+
+### Rate limiter
+
+- **Enable Rate Limiter (required)** — when on, per-user request frequency and daily token quotas are enforced via Redis.
+- **Max Requests Per Minute (RPM)** — per-user request cap, default `5`.
+- **RPM Window Time (Minute)** — sliding window for the RPM check, default `5`.
+- **Max Total Tokens Per Day** — per-user combined input + output token cap, default `1000000`.
+- **Max Input Tokens Per Day** — per-user input token cap, default `200000`.
+- **Max Output Tokens Per Day** — per-user output token cap, default `1000000`.
+
+Click **Install** to start installation. The init container will:
+
+1. Create the three logical databases (`docvec_sys_kb`, `docvec_user_kb`, `docvec_kb`) if missing.
+2. Restore the selected built-in dump into `docvec_sys_kb`.
+3. Apply schema migrations and ensure the BM25 index exists.
 
 ## Troubleshooting
 
-If the chat interface fails to respond, you can check the Alauda Hyperflux pod logs for troubleshooting:
+If the chat interface fails to respond, check the Alauda Hyperflux pod logs:
 
 ```bash
+# Server
 kubectl -n cpaas-system logs -l app=smart-doc -c serve
+
+# Init container (first-start KB bootstrap and upgrade-time KB swap)
+kubectl -n cpaas-system logs -l app=smart-doc -c init-database
 ```
 
-In most cases, the issue is caused by incorrect LLM service configurations, or Cohere API configurations when rerank is enabled.
-Check the error messages in the logs to fix the configuration issues.
+Most issues are caused by:
+
+- Incorrect LLM service configuration — wrong base URL, wrong API version for Azure, wrong model name.
+- Cohere API misconfiguration when reranking is on.
+- The init container failing to create or restore the system KB database — the init log lines (prefixed `[upgrade]` for the data swap step) point to the failing step.

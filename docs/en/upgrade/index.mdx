@@ -8,7 +8,7 @@ This document provides instructions for upgrading Alauda Hyperflux to a newer ve
 
 ## Standard Upgrade Steps
 
-For most version upgrades (except for v1.2.0 to v1.2.1), you can simply follow these steps in the ACP console:
+For most version upgrades (except for v1.2.0 → v1.2.1 and v1.3.x → v1.4.x), you can simply follow these steps in the ACP console:
 
 1. **Upload the new version of the plugin package to the ACP Marketplace.**
     Upload the package in the same way as the initial installation.
@@ -24,6 +24,99 @@ For most version upgrades (except for v1.2.0 to v1.2.1), you can simply follow t
 4. **Verify the upgrade result.**
     After the upgrade is complete, confirm that the version number has been updated in the **Features** tab.
     Verify normal operation through plugin status monitoring or logs.
+
+## Upgrading from v1.3.x to v1.4.x (Embedding Model Switch)
+
+> **IMPORTANT:** v1.4.0 ships a new embedding model (`gte-multilingual-base`, replacing
+> `paraphrase-multilingual-mpnet-base-v2`). The vector spaces are not compatible, so the system knowledge base
+> must be re-embedded. **The chart does this automatically** during the upgrade — but please read this section
+> before applying, especially if you have built a custom knowledge base.
+
+### What the upgrade does automatically
+
+When the new chart rolls out, the init container scans `docvec_sys_kb` for any legacy mpnet collection that
+matches a rule in `smartdoc.acpKbUpgradeRules` (default: ACP 4.1 and ACP 4.2 mpnet collections), then:
+
+1. Records the in-flight swap into a `kb_swap_state` row (so it can recover if the pod is killed mid-swap).
+2. Drops the old collection's tables in `docvec_sys_kb`.
+3. `pg_restore` the new gte dump from `/workspace-smart-doc/dumps/`.
+4. Renames the new collection back to the old collection name so the running server keeps querying the same
+   name. **You do not need to change `pgconnect.pgCollectionName`.**
+5. Re-applies the `doc_id` btree index and the ParadeDB BM25 index.
+6. Stamps `schema_migrations` with `acpKbDataVersion` so re-runs are no-ops.
+
+The swap is:
+
+- **Idempotent** — a chart re-roll without changing `acpKbDataVersion` is a no-op.
+- **Crash-safe** — pod kill between DROP and RESTORE is recoverable on next start.
+- **Multi-replica safe** — a PostgreSQL advisory lock keyed on `acpKbDataVersion` serialises the swap.
+
+### Recommended pre-upgrade backup
+
+The swap drops the old collection and replaces it with new data; the old mpnet vectors are not retained.
+Even though the bundled dumps are reproducible, take a backup of `docvec_sys_kb` and `docvec_user_kb` before
+upgrading so you can roll back if anything goes wrong:
+
+```bash
+# Get the PostgreSQL pod name (if using the built-in database)
+kubectl -n cpaas-system get pod | grep postgre-vec
+
+# Dump both knowledge-base databases
+kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -Fc \
+  -d docvec_sys_kb -f /tmp/docvec_sys_kb.backup.dump
+kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -Fc \
+  -d docvec_user_kb -f /tmp/docvec_user_kb.backup.dump
+
+# Copy them to your local machine
+kubectl -n cpaas-system cp <postgre-vec-xxx>:/tmp/docvec_sys_kb.backup.dump ./docvec_sys_kb.backup.dump
+kubectl -n cpaas-system cp <postgre-vec-xxx>:/tmp/docvec_user_kb.backup.dump ./docvec_user_kb.backup.dump
+```
+
+`docvec_user_kb` (BYO Knowledge) and `docvec_kb` (chat history) are **not touched** by the swap — but a
+backup is cheap insurance.
+
+### Execute the upgrade
+
+Follow the **Standard Upgrade Steps** above. The init container will run the swap automatically the first time
+a smart-doc pod restarts on the new version.
+
+### Verify the upgrade
+
+Tail the init container log and confirm the swap completed:
+
+```bash
+kubectl -n cpaas-system logs -l app=smart-doc -c init-database | grep '\[upgrade\]'
+```
+
+A successful swap prints lines like:
+
+```
+[upgrade] swap docvec_mpnet_acp_4_1_1215 (in docvec_sys_kb) -> dump docvec_gte_acp_4_1_20260508.dump; final name=gte-multilingual-base_20260410
+[upgrade] data_version=20260508-gte-acp-4-x stamped; kb_swap_state cleared
+```
+
+Once the smart-doc pod becomes Ready, run a representative question through the chat UI to confirm answers are
+grounded in the new corpus.
+
+### Special case: you maintain a custom knowledge base
+
+If you previously followed [Build a Custom Knowledge Base](../build-custom-kb.mdx) on the v1.3.x mpnet model,
+the vectors in your custom collection are **not** compatible with the v1.4.0 server. You must:
+
+1. **Before the upgrade:** rebuild your custom KB with `gte-multilingual-base` (see the linked guide).
+2. Add a rule for your custom collection to `smartdoc.acpKbUpgradeRules` in your values override:
+   ```yaml
+   smartdoc:
+     acpKbDataVersion: "20260512-custom-gte"  # bump to re-arm the swap
+     acpKbUpgradeRules: |
+       docvec_mpnet_acp_4_1_1215 docvec_gte_acp_4_1_20260508.dump docvec_gte_acp_4_1_20260508
+       docvec_mpnet_acp_4_2_1222 docvec_gte_acp_4_2_20260508.dump docvec_gte_acp_4_2_20260508
+       <your_mpnet_collection_name>  <your-gte-collection-name>.dump  <your-gte-collection-name>
+   ```
+3. Apply the upgrade. The init container processes every rule line in turn.
+
+If you skip step 1, the chart will still upgrade, but retrieval against the stale custom collection will
+return zero hits and answers will fall back to "I don't have enough information".
 
 ## Upgrading from v1.2.0 to v1.2.1 (Special Case)
 

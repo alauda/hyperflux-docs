@@ -1,0 +1,322 @@
+---
+weight: 17
+---
+
+# Build a Custom Knowledge Base
+
+The Alauda Hyperflux plugin ships with a built-in knowledge base covering Alauda Container Platform (ACP) and
+Alauda product documentation. For most deployments this is enough. You should follow this guide when you also
+want Hyperflux to answer questions grounded in:
+
+- Internal runbooks, SRE playbooks, or design documents specific to your organisation.
+- Versions or branches of Alauda product docs that don't ship in the bundled dump.
+- Customer-facing documentation that lives in private Git repositories.
+
+The output of this workflow is a PostgreSQL dump file that can be restored into the Hyperflux system KB
+(`docvec_sys_kb`) — either replacing the bundled corpus or extending it.
+
+## How the embedding pipeline works
+
+The smart-doc builder turns a list of Git repositories into a vectorised knowledge base in three stages:
+
+1. **Prepare** — clone the repos, split each `.md` / `.mdx` document by heading and chunk size, then call an LLM
+   to generate a one-paragraph summary and a few representative questions per document. Output: `documents.json`.
+2. **Embed** — load the `gte-multilingual-base` embedding model, embed both the chunks and the per-document
+   summaries, and write them to a PostgreSQL + ParadeDB instance as a LangChain PGVector collection. A BM25
+   index is created alongside the vector index.
+3. **Dump** — `pg_dump` the resulting collection so it can be shipped to production.
+
+The resulting dump is restored on the production cluster either by the init container (preferred) or with
+`pg_restore` directly.
+
+## Prerequisites
+
+- A workstation with **Python 3.13+**, **`uv`**, and **`git`**.
+- **Read access** to every Git repository you want to ingest (HTTPS token or SSH key).
+- An **LLM endpoint** with sufficient quota — the prepare phase calls the LLM once per source document
+  (roughly 1,000–3,000 calls per ACP-sized knowledge base; ~$5–20 on Azure GPT-5-mini at the time of writing).
+- The **`gte-multilingual-base`** embedding model. Download once from HuggingFace:
+  ```bash
+  # Roughly 1.2 GB on disk, runs on CPU or CUDA.
+  huggingface-cli download Alibaba-NLP/gte-multilingual-base \
+    --local-dir /path/to/models/gte-multilingual-base
+  ```
+  The same model is baked into the production image at `/opt/gte-multilingual-base`. If your custom KB uses any
+  other embedding model the production server will not be able to query it.
+- A **PostgreSQL + ParadeDB** instance reachable from the workstation. The simplest options:
+    - Run the same `mlops/paradedb:0.22.6-pg18` image locally with Docker.
+    - Connect the builder directly to the production PG (skip the dump-and-restore step).
+- A **clone of the smart-doc repository** for the builder CLI:
+  ```bash
+  git clone https://github.com/alauda/smart-doc.git
+  cd smart-doc && uv sync
+  ```
+
+## Step 1 — Describe your corpus
+
+Create a JSON manifest that lists every Git repository you want to ingest. Save it under
+`builder/data/<your-name>.json`.
+
+```json
+{
+  "kb_version": "1.0",
+  "repos": [
+    {
+      "git_repo": "https://gitlab.example.com/sre/runbooks",
+      "branch": "main",
+      "doc_version": "2026.05",
+      "title": "SRE Runbooks",
+      "doc_url_template": "/runbooks/{{ABSOLUTE_URL.split('/docs/en/')[-1].replace('.mdx','.html').replace('.md','.html')}}",
+      "origin": "internal",
+      "split_type": "title,chunk",
+      "doc_type": "md,mdx"
+    },
+    {
+      "git_repo": "https://github.com/myorg/architecture-decisions",
+      "branch": "main",
+      "doc_version": "1.0",
+      "title": "Architecture Decisions",
+      "doc_url_template": "/adr/{{ABSOLUTE_URL.split('/docs/en/')[-1].replace('.md','.html')}}",
+      "origin": "internal",
+      "sub_dirs": ["docs/en"],
+      "split_type": "title,chunk",
+      "doc_type": "md,mdx"
+    }
+  ]
+}
+```
+
+Field reference (full list in `builder/README.md`):
+
+| Field | Description |
+|---|---|
+| `git_repo` | Git URL. HTTPS auth uses `GIT_USER` / `GIT_TOKEN` (or `GITHUB_USER` / `GITHUB_TOKEN` for github.com). |
+| `branch` / `tag` | Branch (default `main`) or tag (tag wins if both set). |
+| `doc_version` | Version label stored on each chunk; surfaced in retrieval filters. |
+| `title` | Human-readable corpus name; appears in answer citations. |
+| `doc_url_template` | Jinja template producing the relative URL for each doc; concatenated with `ONLINE_DOC_BASE_URL` at retrieval time. The `ABSOLUTE_URL` variable is the doc's local absolute path. |
+| `origin` | Free-form bucket label (e.g., `internal`, `ACP`). |
+| `sub_dirs` | Optional — only ingest these subdirectories of the repo. |
+| `split_type` | `title`, `chapter`, `chunk`, or any combination joined by `,`. The bundled ACP KB uses `title,chunk`. |
+| `doc_type` | `md`, `mdx`, or `md,mdx`. |
+| `kb_version` (top-level) | Stamped on every chunk under `metadata.version`; used to sanity-check that all chunks in a dump came from the same prepare run. |
+
+## Step 2 — Set the builder environment
+
+Copy `builder/run.sh` and fill in the credentials. You only need the LLM and embedding sections for this
+workflow:
+
+```bash
+# Git access (only needed if your repos are private)
+export GIT_USER="<your-gitlab-username>"
+export GIT_TOKEN="<your-gitlab-access-token>"
+export GITHUB_USER="<your-github-username>"
+export GITHUB_TOKEN="<your-github-access-token>"
+
+# LLM (used by `prepare` to produce per-document summaries and questions)
+export LLM_BASE_URL="https://<your-azure-openai-endpoint>.openai.azure.com/"
+export LLM_API_KEY="<your-azure-openai-api-key>"
+export LLM_MODEL_NAME="gpt-5-mini"
+export AZURE_OPENAI_API_VERSION="2025-04-01-preview"
+export AZURE_OPENAI_DEPLOYMENT_NAME="gpt-5-mini"
+export ENABLE_GEN_QUESTIONS="true"   # required for doc_summary vectors
+
+# Embedding model
+export EMB_MODEL="/path/to/gte-multilingual-base"
+export DEVICE="cuda"                  # "cpu" if no GPU available
+
+# PostgreSQL connection — point at your custom KB database
+export PG_CONN_STR="postgresql+psycopg://postgres:<password>@<pg-host>:5432/<your-db-name>"
+export COLLECTION_NAME="<your-collection-name>"
+```
+
+Then `source` it:
+
+```bash
+cd builder
+source run.sh
+```
+
+## Step 3 — Generate `documents.json` (prepare phase)
+
+Clone the repos, split into chunks, and have the LLM produce summaries:
+
+```bash
+python smart_doc_builder.py prepare --config data/<your-name>.json
+# Output: documents.json
+```
+
+Useful flags:
+
+- `--dryrun` — print the document list without calling the LLM. Use this to confirm your `sub_dirs` and `doc_type`
+  filters match what you expect.
+
+This step is idempotent on the LLM side — repeated runs reuse cached LLM responses keyed by document content,
+so re-running after editing the manifest only costs LLM calls for the changed docs.
+
+## Step 4 — Embed into PostgreSQL
+
+```bash
+python smart_doc_builder.py embed \
+  --from-json documents.json \
+  --emb-model "$EMB_MODEL" \
+  --pg-conn-str "$PG_CONN_STR" \
+  --collection-name "$COLLECTION_NAME" \
+  --vector-types chunk,doc_summary \
+  --min-chunk-size 600 --max-chunk-size 2000 --chunk-overlap 200 \
+  --device "$DEVICE" \
+  --create-db
+```
+
+What the flags do:
+
+| Flag | Recommendation |
+|---|---|
+| `--vector-types chunk,doc_summary` | Multi-vector: each doc contributes both chunk vectors and a doc-level summary vector. Matches the production retrieval shape — leave it on. |
+| `--min-chunk-size` / `--max-chunk-size` / `--chunk-overlap` | `600 / 2000 / 200` matches the bundled `cs2000` dump. Use `--max-chunk-size 3000` to match the `cs3000` variant. Larger chunks slightly help recall on long-form docs but use more tokens per answer. |
+| `--device cuda` | Strongly recommended on a GPU node — embedding 5,000 chunks on CPU takes around an hour. |
+| `--create-db` | Auto-create the database if missing. Drop this flag once the database exists to avoid accidental recreation. |
+
+The embed step does not call the LLM; it can be re-run cheaply to try a different chunk size or to extend an
+existing collection with new documents.
+
+## Step 5 — Validate retrieval quality (optional but recommended)
+
+If you maintain test cases under `evaluator/cases/retrieval/`, point the evaluator at your new collection:
+
+```bash
+python -m evaluator.src --layer retrieval --strategy hybrid_rrf \
+  --emb-model "$EMB_MODEL" \
+  --pg-conn-str "$PG_CONN_STR" \
+  --collection-name "$COLLECTION_NAME" \
+  --device "$DEVICE" \
+  --k 5
+```
+
+Look for `Recall@5 ≥ 0.80` and `MRR@5 ≥ 0.55` as a sanity baseline; the bundled ACP corpora hit
+`Recall@5 ≈ 0.82` on hybrid retrieval.
+
+## Step 6 — Deliver to production
+
+Choose one of the two delivery modes below. Mode A is simpler for a first cut; Mode B is the production-ready
+path.
+
+### Mode A — Embed directly into the production PG
+
+If your workstation can reach the production PostgreSQL, point `--pg-conn-str` at it and re-run **Step 4** with
+`--collection-name` set to whatever you want the production server to read. Then update the chart value
+`pgconnect.pgCollectionName` to that name and roll the smart-doc deployment.
+
+This bypasses the dump-and-restore round-trip but couples the build environment to production. Suitable for
+single-cluster deployments where you control both ends.
+
+### Mode B — Dump and restore via the chart's data-swap mechanism (recommended)
+
+This mirrors how the bundled ACP dumps are shipped. The init container handles the swap atomically and
+idempotently, so it is safe across pod restarts and multi-replica deployments.
+
+#### B1. Produce the dump
+
+```bash
+pg_dump -Fc \
+  -h <pg-host> -U postgres \
+  -d <your-db-name> \
+  -f <your-collection-name>.dump
+```
+
+The dump file name **must equal the collection name** (without the `.dump` suffix). The init container's
+upgrade rule parser uses the file name as the collection's internal name when restoring.
+
+#### B2. Ship the dump into the plugin image
+
+The bundled dumps live at `/workspace-smart-doc/dumps/` inside the smart-doc container, baked into the
+`mlops/smart-doc` image at build time (see `dumps/` in the smart-doc repository). To add a custom dump:
+
+1. Drop your `<your-collection-name>.dump` into `dumps/` in your smart-doc fork.
+2. Rebuild the smart-doc container image and push it to your registry.
+3. Update the chart `global.images.smartdoc.tag` to your new tag.
+
+If you cannot rebuild the image, fall back to Mode A or to manual `pg_restore` (Mode C below).
+
+#### B3. Configure the swap rule
+
+In your `values.yaml` override (or in the install form's advanced YAML editor), set:
+
+```yaml
+smartdoc:
+  # Bump this value whenever you change the rules below — it is the idempotency
+  # stamp the init container writes into schema_migrations.
+  acpKbDataVersion: "20260512-custom-runbooks"
+  # One rule per line, whitespace-separated:
+  #   <old_collection_name>  <new_dump_filename>  <new_dump_internal_collection>
+  acpKbUpgradeRules: |
+    <current_collection_name>  <your-collection-name>.dump  <your-collection-name>
+```
+
+`<current_collection_name>` is whatever the running server is using — typically the bundled
+`gte-multilingual-base_20260410` for fresh v1.4.0 deployments. After the swap, the chart silently keeps the
+old collection name so `pgconnect.pgCollectionName` can stay unchanged on the server side.
+
+Apply the chart upgrade. The init container will:
+
+1. Acquire an advisory lock (multi-replica safe).
+2. Record the in-flight swap into `kb_swap_state` (crash-safe — recovery on restart).
+3. Drop the existing collection's tables in `docvec_sys_kb`.
+4. `pg_restore` your dump into the same database.
+5. Rename the new collection to `<current_collection_name>` so the server keeps querying the same name.
+6. Stamp `schema_migrations` and clear `kb_swap_state`.
+
+You can confirm by tailing the init log:
+
+```bash
+kubectl -n cpaas-system logs -l app=smart-doc -c init-database | grep '\[upgrade\]'
+```
+
+#### Mode C — Manual `pg_restore` (air-gapped or one-off)
+
+If neither rebuilding the image nor reaching production from the workstation is possible, the dump can be
+restored by hand into the running PG and the chart told to query it directly:
+
+```bash
+# Copy the dump into the postgres pod
+kubectl -n cpaas-system cp <your-collection-name>.dump \
+  postgre-vec-0:/tmp/<your-collection-name>.dump
+
+# Restore into docvec_sys_kb
+kubectl -n cpaas-system exec -it postgre-vec-0 -- bash -lc \
+  "pg_restore -U postgres -d docvec_sys_kb /tmp/<your-collection-name>.dump"
+
+# Update the running collection name
+kubectl -n cpaas-system edit configmap smart-doc-config
+# Change PG_COLLECTION_NAME to <your-collection-name>
+
+# Roll the deployment to pick up the new collection
+kubectl -n cpaas-system rollout restart deployment smart-doc
+```
+
+This path skips the chart-level idempotency stamp; if you re-roll the chart it will not re-apply your custom
+data. Switch to Mode B as soon as the constraint that forced this path is gone.
+
+## Re-roll cadence
+
+Custom knowledge bases drift faster than product documentation. Plan to re-run **prepare → embed → dump** on
+a schedule that matches your source repos:
+
+- Daily-changing runbooks → nightly cron, swap with a fresh `acpKbDataVersion` each run.
+- Quarterly architecture docs → manual re-roll on each release boundary.
+
+The init container only re-runs the swap when `acpKbDataVersion` changes, so re-deploying the chart with the
+same version is a no-op even if the dump file on disk has been replaced.
+
+## Caveats
+
+- The custom KB occupies the same `docvec_sys_kb` database as any bundled ACP dump. **Mode B replaces the
+  bundled dump entirely.** If you want to keep ACP product knowledge alongside your internal docs, ingest both
+  the ACP repos and your internal repos in the same `prepare` run so the resulting dump contains both.
+- The user-facing **BYO Knowledge Tool** (introduced in v1.3.1) writes to `docvec_user_kb` instead and is
+  unaffected by this workflow. Use BYO Knowledge for end-user document uploads, and use this guide for
+  admin-curated corpora baked into the deployment.
+- Embedding-model mismatch is the most common failure mode: vectors built with a non-`gte-multilingual-base`
+  model will be silently retrievable but always score near zero, so the answer quality collapses without an
+  obvious error. If you see "I don't have enough information" answers across the board after a custom-KB
+  swap, double-check `EMB_MODEL` was the same path the production server uses (`/opt/gte-multilingual-base`).
