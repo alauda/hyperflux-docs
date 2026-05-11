@@ -99,7 +99,7 @@ Field reference (full list in `builder/README.md`):
 | `sub_dirs` | Optional — only ingest these subdirectories of the repo. |
 | `split_type` | `title`, `chapter`, `chunk`, or any combination joined by `,`. The bundled ACP KB uses `title,chunk`. |
 | `doc_type` | `md`, `mdx`, or `md,mdx`. |
-| `kb_version` (top-level) | Stamped on every chunk under `metadata.version`; used to sanity-check that all chunks in a dump came from the same prepare run. |
+| `kb_version` | Stamped on every chunk under `metadata.version`; used to sanity-check that all chunks in a dump came from the same prepare run. Accepted as a top-level key in the JSON manifest *and* as a `--kb-version` CLI flag. |
 
 ## Step 2 — Set the builder environment
 
@@ -230,7 +230,10 @@ upgrade rule parser uses the file name as the collection's internal name when re
 #### B2. Ship the dump into the plugin image
 
 The bundled dumps live at `/workspace-smart-doc/dumps/` inside the smart-doc container, baked into the
-`mlops/smart-doc` image at build time (see `dumps/` in the smart-doc repository). To add a custom dump:
+`mlops/smart-doc` image at build time. The `dumps/` directory in the smart-doc repository tracks the
+per-version source dumps (e.g. `docvec_gte_acp_4_{1,2,3}_20260508.dump`); the cs2000 / cs3000 dumps that
+the install-form **Built-in KnowledgeBase File** selector points to are produced separately and added to the
+image during the build, so they will not be visible on a fresh checkout. To add a custom dump:
 
 1. Drop your `<your-collection-name>.dump` into `dumps/` in your smart-doc fork.
 2. Rebuild the smart-doc container image and push it to your registry.
@@ -278,24 +281,28 @@ If neither rebuilding the image nor reaching production from the workstation is 
 restored by hand into the running PG and the chart told to query it directly:
 
 ```bash
+# Look up the postgres pod name (the bundled pgvector is a Deployment, so the pod
+# has a hashed suffix — there is no -0 ordinal to assume).
+POD=$(kubectl -n cpaas-system get pod -l app=postgre-vec -o jsonpath='{.items[0].metadata.name}')
+
 # Copy the dump into the postgres pod
 kubectl -n cpaas-system cp <your-collection-name>.dump \
-  postgre-vec-0:/tmp/<your-collection-name>.dump
+  "${POD}:/tmp/<your-collection-name>.dump"
 
 # Restore into docvec_sys_kb
-kubectl -n cpaas-system exec -it postgre-vec-0 -- bash -lc \
+kubectl -n cpaas-system exec -it "${POD}" -- bash -lc \
   "pg_restore -U postgres -d docvec_sys_kb /tmp/<your-collection-name>.dump"
-
-# Update the running collection name
-kubectl -n cpaas-system edit configmap smart-doc-config
-# Change PG_COLLECTION_NAME to <your-collection-name>
-
-# Roll the deployment to pick up the new collection
-kubectl -n cpaas-system rollout restart deployment smart-doc
 ```
 
-This path skips the chart-level idempotency stamp; if you re-roll the chart it will not re-apply your custom
-data. Switch to Mode B as soon as the constraint that forced this path is gone.
+> **IMPORTANT:** Do **not** edit the rendered `smart-doc-config` ConfigMap directly to point at the new
+> collection. The chart re-renders the ConfigMap from `pgconnect.pgCollectionName` on every Helm operation,
+> and the init container re-applies any rule in `acpKbUpgradeRules` on every pod restart — both will
+> overwrite a manual edit. Instead, push the new collection name through the chart by overriding
+> `pgconnect.pgCollectionName: <your-collection-name>` in your values, then re-roll. The init container will
+> see the existing collection in `docvec_sys_kb` and leave it alone (no rule fires).
+
+This path skips the dump-on-disk distribution and the multi-replica advisory lock. Switch to Mode B as soon
+as the constraint that forced this path is gone.
 
 ## Re-roll cadence
 
@@ -313,9 +320,10 @@ same version is a no-op even if the dump file on disk has been replaced.
 - The custom KB occupies the same `docvec_sys_kb` database as any bundled ACP dump. **Mode B replaces the
   bundled dump entirely.** If you want to keep ACP product knowledge alongside your internal docs, ingest both
   the ACP repos and your internal repos in the same `prepare` run so the resulting dump contains both.
-- The user-facing **BYO Knowledge Tool** (introduced in v1.3.1) writes to `docvec_user_kb` instead and is
-  unaffected by this workflow. Use BYO Knowledge for end-user document uploads, and use this guide for
-  admin-curated corpora baked into the deployment.
+- The user-facing **BYO Knowledge Tool** (introduced in v1.3.1) targets the user knowledge-base database
+  (`docvec_user_kb`), not the system KB this guide writes to, so it is unaffected by this workflow. Use BYO
+  Knowledge for end-user document uploads, and use this guide for admin-curated corpora baked into the
+  deployment.
 - Embedding-model mismatch is the most common failure mode: vectors built with a non-`gte-multilingual-base`
   model will be silently retrievable but always score near zero, so the answer quality collapses without an
   obvious error. If you see "I don't have enough information" answers across the board after a custom-KB

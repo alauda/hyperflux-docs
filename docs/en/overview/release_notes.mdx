@@ -12,7 +12,9 @@ weight: 40
 
 The bundled knowledge base has been re-embedded with Alibaba's `gte-multilingual-base` model, replacing
 `paraphrase-multilingual-mpnet-base-v2`. Cross-language retrieval (e.g., a Chinese question against English
-docs) is substantially better, and recall@5 on the bundled ACP corpora rises to ≈ 0.82 with hybrid retrieval.
+docs) is substantially better, and the per-repo macro recall@5 on the bundled ACP corpora rises to ≈ 0.91
+with hybrid retrieval (up from a 0.8185 baseline that previously needed Cohere reranking stacked on top to
+reach 0.8350).
 Existing v1.3.x deployments are migrated automatically — see the [Upgrade guide](../upgrade/index.mdx).
 
 #### **Hybrid retrieval (BM25 + dense vector)**
@@ -49,8 +51,10 @@ without losing earlier context.
 #### **Service-to-service API key authentication (HMAC-SHA256)**
 
 A new `apiKey` / `apiKeyHeader` / `apiKeyMaxTimeDiff` set lets external services call the smart-doc API
-without going through the OAuth proxy. Tokens are HMAC of `<username>:<unix_ts>`, so the shared key never
-travels on the wire. Disabled by default — leave `apiKey` empty unless you need it.
+without going through the OAuth proxy. The token sent in the `apiKeyHeader` is a three-part colon string
+`<username>:<unix_ts>:<hex_hmac_sha256(API_KEY, 'username:ts')>`, so the shared key never travels on the wire
+and replayed tokens expire after `apiKeyMaxTimeDiff` seconds (default 300). Disabled by default — leave
+`apiKey` empty unless you need it.
 
 #### **MCP server exposed via Ingress**
 
