@@ -37,7 +37,7 @@ restart. The system knowledge base is untouched.
 > **NOTE:** The BM25 index used by hybrid retrieval is **not** built by the embed step. The bundled system-KB
 > dumps include a pre-built BM25 index, but the user-KB database is created empty during install. If your
 > deployment has hybrid retrieval enabled (the default), you must create the BM25 index on the user-KB
-> collection once — see Step 6.
+> collection once — see Step 5.
 
 ## Prerequisites
 
@@ -199,22 +199,7 @@ What the flags do:
 The embed step does not call the LLM; it can be re-run cheaply against the same `documents.json` to try a
 different chunk size or to extend an existing collection with new documents.
 
-## Step 5 — Validate retrieval quality (optional but recommended)
-
-If you maintain test cases under `evaluator/cases/retrieval/`, point the evaluator at your new collection
-from inside the same shell:
-
-```bash
-python -m evaluator.src --layer retrieval --strategy hybrid_rrf \
-  --pg-conn-str "${PG_USER_KB_CONN_STR}" \
-  --collection-name user_defined_kb \
-  --k 5
-```
-
-Look for `Recall@5 ≥ 0.80` and `MRR@5 ≥ 0.55` as a sanity baseline; the bundled ACP corpora hit per-repo
-macro `Recall@5 ≈ 0.91` on hybrid retrieval (`reports/2026-05-08/SUMMARY.md`).
-
-## Step 6 — Create the BM25 index on the user knowledge base (one-time)
+## Step 5 — Create the BM25 index on the user knowledge base (one-time)
 
 The user-KB database is created empty during install — unlike the bundled system-KB dumps, it does not ship
 with a BM25 index pre-built. If hybrid retrieval is enabled (the default), create the index once after your
@@ -263,7 +248,7 @@ kubectl -n cpaas-system --context <target-context> exec -it \
   "pg_restore -d \"\${PG_USER_KB_CONN_STR}\" /tmp/user_kb.dump"
 ```
 
-Then perform Step 6 (BM25 index) on each target cluster — the index is per-database and doesn't survive a
+Then perform Step 5 (BM25 index) on each target cluster — the index is per-database and doesn't survive a
 restore-into-empty-DB on its own (a restore into a populated DB merges BM25 if present in the dump; for a
 fresh user KB, run the `CREATE INDEX` after the restore).
 
@@ -308,7 +293,7 @@ psql "${PG_USER_KB_CONN_STR}" -c "
 "
 ```
 
-Then re-run Step 4 to repopulate, and re-run Step 6 (BM25 index) — the BM25 index is dropped with the
+Then re-run Step 4 to repopulate, and re-run Step 5 (BM25 index) — the BM25 index is dropped with the
 table.
 
 ## Caveats
