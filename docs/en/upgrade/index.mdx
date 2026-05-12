@@ -45,9 +45,13 @@ matches a rule in `smartdoc.acpKbUpgradeRules` (default: ACP 4.1 and ACP 4.2 mpn
 5. Verifies the new collection name landed (`SELECT count(*) ... = 1`); aborts otherwise.
 6. Renames the new collection back to the old collection name so the running server keeps querying the same
    name. **You do not need to change `pgconnect.pgCollectionName`.**
-7. Rebuilds the ParadeDB BM25 index if the new dump didn't already ship one, and re-runs the `doc_id` btree
-   and URL-backfill schema migrations against the freshly restored table.
-8. Stamps `schema_migrations` with `acpKbDataVersion` and clears the inflight `kb_swap_state` row.
+7. Rebuilds the ParadeDB BM25 index if the new dump didn't already ship one (recent gte dumps include it).
+8. Stamps `schema_migrations` with `003_data_swap_<old_collection>_<acpKbDataVersion>` and clears the
+   inflight `kb_swap_state` row.
+9. After the swap block returns, an unconditional migration loop re-applies the `doc_id` btree
+   (`001_add_doc_id_index`) and the URL-backfill (`002_backfill_doc_id_from_url`) against the freshly
+   restored table — the swap block clears their stamps so the loop sees them as "not applied" and runs
+   them.
 
 The swap is:
 
@@ -65,10 +69,12 @@ upgrading so you can roll back if anything goes wrong:
 # Get the PostgreSQL pod name (if using the built-in database)
 kubectl -n cpaas-system get pod | grep postgre-vec
 
-# Dump both knowledge-base databases
-kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -Fc \
+# Dump both knowledge-base databases. The default password for the built-in PostgreSQL
+# instance is `alauda-test`; pg_dump will prompt for it. To suppress the prompt, prefix
+# with `PGPASSWORD=alauda-test ` inside the exec.
+kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -W -Fc \
   -d docvec_sys_kb -f /tmp/docvec_sys_kb.backup.dump
-kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -Fc \
+kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_dump -U postgres -W -Fc \
   -d docvec_user_kb -f /tmp/docvec_user_kb.backup.dump
 
 # Copy them to your local machine
@@ -96,11 +102,16 @@ A successful swap prints lines like:
 
 ```
 [upgrade] swap docvec_mpnet_acp_4_1_1215 (in docvec_sys_kb) -> dump docvec_gte_acp_4_1_20260508.dump; final name=gte-multilingual-base_20260410
-[upgrade] 20260508-gte-acp-4-x applied.
+[upgrade] 003_data_swap_docvec_mpnet_acp_4_1_1215_20260508-gte-acp-4-x applied.
 ```
 
-A re-roll without a `acpKbDataVersion` change prints `[upgrade] 20260508-gte-acp-4-x already applied, skipping.`
-instead.
+A re-roll **after** the swap has completed prints **no `[upgrade]` line at all** — the rule scan finds no
+matching collection (the OLD name was renamed to `pgconnect.pgCollectionName` during step 6) and the swap
+block exits silently. Absence of a log line on subsequent rolls is the expected post-swap state.
+
+The `[upgrade] ... already applied, skipping.` line is reserved for a recovery scenario: a `kb_swap_state`
+row exists for a stamp that has already been applied (e.g., a pod was killed after the stamp landed but
+before the inflight row was cleared). It is not the normal idempotent re-roll output.
 
 Once the smart-doc pod becomes Ready, run a representative question through the chat UI to confirm answers are
 grounded in the new corpus.
@@ -111,16 +122,22 @@ If you previously followed [Build a Custom Knowledge Base](../build-custom-kb.md
 the vectors in your custom collection are **not** compatible with the v1.4.0 server. You must:
 
 1. **Before the upgrade:** rebuild your custom KB with `gte-multilingual-base` (see the linked guide).
-2. Add a rule for your custom collection to `smartdoc.acpKbUpgradeRules` in your values override:
+2. Replace the bundled `acpKbUpgradeRules` with a single rule for your custom collection:
    ```yaml
    smartdoc:
      acpKbDataVersion: "20260512-custom-gte"  # bump to re-arm the swap
      acpKbUpgradeRules: |
-       docvec_mpnet_acp_4_1_1215 docvec_gte_acp_4_1_20260508.dump docvec_gte_acp_4_1_20260508
-       docvec_mpnet_acp_4_2_1222 docvec_gte_acp_4_2_20260508.dump docvec_gte_acp_4_2_20260508
        <your_mpnet_collection_name>  <your-gte-collection-name>.dump  <your-gte-collection-name>
    ```
-3. Apply the upgrade. The init container processes every rule line in turn.
+   The bundled ACP rules don't apply here — a custom-KB deployment already replaced those collections in
+   v1.3.x, so the bundled OLD names won't match. Leaving them in the rule list is harmless but cluttered.
+3. Apply the upgrade.
+
+> **NOTE:** The init container processes only **the first rule whose OLD collection is found** in
+> `docvec_sys_kb` per run, then exits the swap block. The DROP-and-restore wipes the entire
+> `langchain_pg_collection` table, so the chart only supports one system-KB collection at a time. If you
+> need to keep both your custom corpus and the bundled ACP corpus, ingest them in the same `prepare` run
+> (see the build-custom-kb guide's Caveats) and ship a single combined dump.
 
 If you skip step 1, the chart will still upgrade, but retrieval against the stale custom collection will
 return zero hits and answers will fall back to "I don't have enough information".
@@ -165,6 +182,9 @@ kubectl -n cpaas-system exec -it <postgre-vec-xxx> -- pg_restore -U postgres -d 
 # (Optional) Update configuration if your database/collection name changed
 kubectl -n cpaas-system edit configmap smart-doc-config
 # Update `PG_CONN_DB` and `PG_COLLECTION_NAME` fields if necessary.
+# (Env-var rename: `PG_CONN_DB` was split into `PG_SYS_KB_DB` / `PG_HISTORY_DB` /
+#  `PG_USER_KB_DB` in later versions. For a v1.4.x upgrade, see the embedding-switch
+#  section above instead — the chart handles the data swap automatically.)
 ```
 
 Wait for the Alauda Hyperflux pods to restart and verify that the knowledge base has been restored successfully.
