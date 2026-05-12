@@ -182,7 +182,7 @@ What the flags do:
 | Flag | Recommendation |
 |---|---|
 | `--pg-conn-str "${PG_USER_KB_CONN_STR}"` | Targets the user knowledge-base database. **Do not** point at `PG_SYS_KB_CONN_STR` unless you are deliberately trying to replace the bundled product knowledge base (see "Replacing the system knowledge base" below). |
-| `--collection-name user_defined_kb` | The collection name the running server reads from `docvec_user_kb`. Use this exact value unless you've overridden `PG_USER_KB_COLLECTION_NAME` for the server. |
+| `--collection-name user_defined_kb` | The collection name the running server reads from `docvec_user_kb`. Use this exact value — the chart does not currently expose a way to change the user-KB collection name the server reads. |
 | `--vector-types chunk,doc_summary` | Multi-vector: each doc contributes both chunk vectors and a doc-level summary vector. Matches the production retrieval shape — leave it on. |
 | `--min-chunk-size` / `--max-chunk-size` / `--chunk-overlap` | `600 / 2000 / 200` matches the bundled `cs2000` dump. Use `--max-chunk-size 3000` to match the `cs3000` variant. Larger chunks slightly help recall on long-form docs but use more tokens per answer. |
 
