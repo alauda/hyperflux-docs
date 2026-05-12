@@ -22,9 +22,16 @@ The smart-doc builder turns a list of Git repositories into a vectorised knowled
 1. **Prepare** — clone the repos, split each `.md` / `.mdx` document by heading and chunk size, then call an LLM
    to generate a one-paragraph summary and a few representative questions per document. Output: `documents.json`.
 2. **Embed** — load the `gte-multilingual-base` embedding model, embed both the chunks and the per-document
-   summaries, and write them to a PostgreSQL + ParadeDB instance as a LangChain PGVector collection. A BM25
-   index is created alongside the vector index.
+   summaries, and write them to a PostgreSQL + ParadeDB instance as a LangChain PGVector collection.
 3. **Dump** — `pg_dump` the resulting collection so it can be shipped to production.
+
+> **NOTE:** The BM25 index used by hybrid retrieval is **not** built by the embed step. The bundled production
+> dumps include a pre-built `idx_bm25_embedding` (so `pg_restore` brings it along), and the chart's init
+> container rebuilds it during the swap path if the dump didn't ship one
+> (`init-database.sh:198-214`). If you publish a custom dump that doesn't already contain a BM25 index, the
+> init container will create one on first restore — but if you query the custom collection directly without
+> ever going through the chart's swap path (e.g., Mode A), you must `CREATE INDEX … USING bm25 (id, document) WITH (key_field='id')`
+> on `langchain_pg_embedding` yourself before hybrid retrieval will work.
 
 The resulting dump is restored on the production cluster either by the init container (preferred) or with
 `pg_restore` directly.
@@ -46,9 +53,10 @@ The resulting dump is restored on the production cluster either by the init cont
 - A **PostgreSQL + ParadeDB** instance reachable from the workstation. The simplest options:
     - Run the same `mlops/paradedb:0.22.6-pg18` image locally with Docker.
     - Connect the builder directly to the production PG (skip the dump-and-restore step).
-- A **clone of the smart-doc repository** for the builder CLI:
+- A **clone of the smart-doc repository** for the builder CLI (private Alauda GitLab — request access if you
+  don't have it):
   ```bash
-  git clone https://github.com/alauda/smart-doc.git
+  git clone git@gitlab-ce.alauda.cn:aml/smart-doc.git
   cd smart-doc && uv sync
   ```
 
@@ -113,13 +121,17 @@ export GIT_TOKEN="<your-gitlab-access-token>"
 export GITHUB_USER="<your-github-username>"
 export GITHUB_TOKEN="<your-github-access-token>"
 
-# LLM (used by `prepare` to produce per-document summaries and questions)
+# LLM (used by `prepare` to produce per-document summaries and questions).
+# ENABLE_GEN_QUESTIONS must be set BEFORE running `prepare` — split_doc.py:641
+# reads it at prepare time and only stores summaries when it is true.
+# `embed --vector-types doc_summary` later READS those summaries from
+# documents.json, so prepare-time miss = embed-time silent zero-summary writes.
 export LLM_BASE_URL="https://<your-azure-openai-endpoint>.openai.azure.com/"
 export LLM_API_KEY="<your-azure-openai-api-key>"
 export LLM_MODEL_NAME="gpt-5-mini"
 export AZURE_OPENAI_API_VERSION="2025-04-01-preview"
 export AZURE_OPENAI_DEPLOYMENT_NAME="gpt-5-mini"
-export ENABLE_GEN_QUESTIONS="true"   # required for doc_summary vectors
+export ENABLE_GEN_QUESTIONS="true"
 
 # Embedding model
 export EMB_MODEL="/path/to/gte-multilingual-base"
@@ -137,6 +149,12 @@ cd builder
 source run.sh
 ```
 
+> **NOTE:** `EMB_MODEL`, `PG_CONN_STR`, and `COLLECTION_NAME` are convenience shell variables for the example
+> commands below — the script's actual env-var defaults are `EMB_MODEL_NAME`, `PG_SYS_KB_CONN_STR`
+> (or `KB_CONN_STR`), and `PG_COLLECTION_NAME` (`builder/src/cmd_args.py:124,129,134`). The example always
+> passes explicit `--flag` values so the names match what the example sets, but if you prefer to omit the
+> flags and rely on env defaults, use the script's names instead.
+
 ## Step 3 — Generate `documents.json` (prepare phase)
 
 Clone the repos, split into chunks, and have the LLM produce summaries:
@@ -151,8 +169,9 @@ Useful flags:
 - `--dryrun` — print the document list without calling the LLM. Use this to confirm your `sub_dirs` and `doc_type`
   filters match what you expect.
 
-This step is idempotent on the LLM side — repeated runs reuse cached LLM responses keyed by document content,
-so re-running after editing the manifest only costs LLM calls for the changed docs.
+> **NOTE:** Prepare does **not** cache LLM responses across runs — every invocation re-issues one LLM call per
+> source document. Plan for the full per-document cost on each re-roll, and only re-run prepare when the
+> source corpus actually changed (otherwise re-run only `embed` against the existing `documents.json`).
 
 ## Step 4 — Embed into PostgreSQL
 
@@ -180,6 +199,11 @@ What the flags do:
 The embed step does not call the LLM; it can be re-run cheaply to try a different chunk size or to extend an
 existing collection with new documents.
 
+> **WARNING:** When `--vector-types` includes `doc_summary` but `documents.json` was produced by a `prepare`
+> run that didn't have `ENABLE_GEN_QUESTIONS=true` set, embed silently emits **zero** summary vectors and
+> only logs `no_summary=N` at the end (`smart_doc_builder.py:445-447, 482-483`) — there is no error. If you
+> see a high `no_summary` count, re-run `prepare` with `ENABLE_GEN_QUESTIONS=true` before re-running embed.
+
 ## Step 5 — Validate retrieval quality (optional but recommended)
 
 If you maintain test cases under `evaluator/cases/retrieval/`, point the evaluator at your new collection:
@@ -194,7 +218,7 @@ python -m evaluator.src --layer retrieval --strategy hybrid_rrf \
 ```
 
 Look for `Recall@5 ≥ 0.80` and `MRR@5 ≥ 0.55` as a sanity baseline; the bundled ACP corpora hit
-`Recall@5 ≈ 0.82` on hybrid retrieval.
+per-repo macro `Recall@5 ≈ 0.91` on hybrid retrieval (`reports/2026-05-08/SUMMARY.md`).
 
 ## Step 6 — Deliver to production
 
@@ -210,6 +234,15 @@ If your workstation can reach the production PostgreSQL, point `--pg-conn-str` a
 This bypasses the dump-and-restore round-trip but couples the build environment to production. Suitable for
 single-cluster deployments where you control both ends.
 
+> **IMPORTANT:** On a fresh install where `docvec_sys_kb` doesn't yet exist, the chart's init container
+> bootstraps it by `pg_restore`-ing the bundled `ACP_DOC_DUMP_FILE` (`init-database.sh:21-30`). Running your
+> custom embed *before* the chart's first start would have its data overwritten by that bootstrap restore.
+> Either pre-create `docvec_sys_kb` (so the bootstrap branch is skipped) before running embed, or wait for
+> the chart's first pod to come Ready and run embed afterwards.
+>
+> Once past bootstrap, the swap rules don't fire against your custom collection because its name doesn't
+> match any rule's OLD field — they only target legacy mpnet collection names.
+
 ### Mode B — Dump and restore via the chart's data-swap mechanism (recommended)
 
 This mirrors how the bundled ACP dumps are shipped. The init container handles the swap atomically and
@@ -224,8 +257,12 @@ pg_dump -Fc \
   -f <your-collection-name>.dump
 ```
 
-The dump file name **must equal the collection name** (without the `.dump` suffix). The init container's
-upgrade rule parser uses the file name as the collection's internal name when restoring.
+The init container's rule parser (`init-database.sh:111`) reads three independent whitespace-separated
+fields per rule: `<old_collection_name> <new_dump_filename> <new_collection_name>`. The dump filename and
+the collection name inside the dump are **not** auto-derived from each other — they are two separate fields
+in step B3 below. The bundled production rules use a `<collection_name>.dump` naming convention to keep the
+two coupled visually, but the script doesn't enforce it. Pick whatever filename works for you; just make
+sure the third field of your B3 rule matches the actual `langchain_pg_collection.name` value inside the dump.
 
 #### B2. Ship the dump into the plugin image
 
@@ -260,14 +297,25 @@ smartdoc:
 `gte-multilingual-base_20260410` for fresh v1.4.0 deployments. After the swap, the chart silently keeps the
 old collection name so `pgconnect.pgCollectionName` can stay unchanged on the server side.
 
-Apply the chart upgrade. The init container will:
+Apply the chart upgrade. The init container will (full sequence in `init-database.sh:64-239`):
 
-1. Acquire an advisory lock (multi-replica safe).
+1. Acquire a PostgreSQL advisory lock keyed on `acpKbDataVersion` so multi-replica inits serialise.
 2. Record the in-flight swap into `kb_swap_state` (crash-safe — recovery on restart).
-3. Drop the existing collection's tables in `docvec_sys_kb`.
+3. Drop `langchain_pg_embedding` and `langchain_pg_collection` in `docvec_sys_kb`.
 4. `pg_restore` your dump into the same database.
-5. Rename the new collection to `<current_collection_name>` so the server keeps querying the same name.
-6. Stamp `schema_migrations` and clear `kb_swap_state`.
+5. Verify the new collection landed (`SELECT count(*) … = 1`); abort otherwise.
+6. Rename the new collection to `<current_collection_name>` so the server keeps querying the same name.
+7. Rebuild the BM25 index if the dump didn't already ship one.
+8. Stamp `schema_migrations` with `003_data_swap_<old_collection>_<acpKbDataVersion>` and clear
+   `kb_swap_state`.
+9. After the swap block returns, an unconditional migration loop re-applies the `doc_id` btree
+   (`001_add_doc_id_index`) and the URL backfill (`002_backfill_doc_id_from_url`) against the freshly
+   restored table.
+
+> **NOTE:** The script processes only **the first matching rule per init run** (`break 2` at `init-database.sh:119`).
+> Because the swap drops the entire `langchain_pg_collection` table, `docvec_sys_kb` is fundamentally
+> single-collection. If you have multiple OLD collections needing migration, ingest them as one combined
+> corpus in the same `prepare` run (see Caveats below) rather than relying on multiple rule lines.
 
 You can confirm by tailing the init log:
 
@@ -289,9 +337,10 @@ POD=$(kubectl -n cpaas-system get pod -l app=postgre-vec -o jsonpath='{.items[0]
 kubectl -n cpaas-system cp <your-collection-name>.dump \
   "${POD}:/tmp/<your-collection-name>.dump"
 
-# Restore into docvec_sys_kb
+# Restore into docvec_sys_kb. The default password for the built-in PostgreSQL
+# instance is `alauda-test`; pg_restore will prompt for it (or pass via PGPASSWORD).
 kubectl -n cpaas-system exec -it "${POD}" -- bash -lc \
-  "pg_restore -U postgres -d docvec_sys_kb /tmp/<your-collection-name>.dump"
+  "PGPASSWORD=alauda-test pg_restore -U postgres -d docvec_sys_kb /tmp/<your-collection-name>.dump"
 ```
 
 > **IMPORTANT:** Do **not** edit the rendered `smart-doc-config` ConfigMap directly to point at the new
@@ -299,7 +348,9 @@ kubectl -n cpaas-system exec -it "${POD}" -- bash -lc \
 > and the init container re-applies any rule in `acpKbUpgradeRules` on every pod restart — both will
 > overwrite a manual edit. Instead, push the new collection name through the chart by overriding
 > `pgconnect.pgCollectionName: <your-collection-name>` in your values, then re-roll. The init container will
-> see the existing collection in `docvec_sys_kb` and leave it alone (no rule fires).
+> see the existing collection in `docvec_sys_kb` and leave it alone — **as long as your custom collection
+> name doesn't appear as the OLD field in any `acpKbUpgradeRules` line**. Inspect the effective rules in
+> values before re-rolling to be safe.
 
 This path skips the dump-on-disk distribution and the multi-replica advisory lock. Switch to Mode B as soon
 as the constraint that forced this path is gone.
@@ -314,6 +365,11 @@ a schedule that matches your source repos:
 
 The init container only re-runs the swap when `acpKbDataVersion` changes, so re-deploying the chart with the
 same version is a no-op even if the dump file on disk has been replaced.
+
+> **NOTE:** Each swap **drops** the existing `langchain_pg_collection` and `langchain_pg_embedding` tables
+> wholesale and replaces them with the new dump's contents (`init-database.sh:155-159, 166-174`). A nightly
+> cron pattern works, but every run replaces yesterday's corpus rather than appending to it — so the new
+> dump must contain the *full* current corpus, not just the diff.
 
 ## Caveats
 
