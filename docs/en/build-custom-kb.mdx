@@ -4,16 +4,19 @@ weight: 17
 
 # Build a Custom Knowledge Base
 
-The Alauda Hyperflux plugin ships with a built-in knowledge base covering Alauda Container Platform (ACP) and
-Alauda product documentation. For most deployments this is enough. You should follow this guide when you also
-want Hyperflux to answer questions grounded in:
+The Alauda Hyperflux plugin ships with a built-in **system knowledge base** covering Alauda Container Platform
+(ACP) and Alauda product documentation. Alongside it, Hyperflux maintains a separate **user knowledge base**
+that you can fill with your own content — internal runbooks, SRE playbooks, design documents, versions of
+Alauda product docs that don't ship in the bundled corpus, or any other private Git repositories. Hyperflux
+retrieves from **both** knowledge bases on every question and merges the results, so adding a custom corpus
+**augments** the bundled product knowledge rather than replacing it.
 
-- Internal runbooks, SRE playbooks, or design documents specific to your organisation.
-- Versions or branches of Alauda product docs that don't ship in the bundled dump.
-- Customer-facing documentation that lives in private Git repositories.
+This guide covers the admin-driven path: bulk-ingest a list of Git repositories into the user knowledge base
+using the in-pod builder. (For end-user file uploads through the chat UI, use the BYO Knowledge tool added
+in v1.3.1 — same destination, different entry point.)
 
-The workflow runs **inside the deployed `smart-doc` pod** — the image already contains the builder source,
-the embedding model, and the right Python environment, and the pod already has connectivity to the system
+The workflow runs **inside the deployed `smart-doc` pod**. The image already contains the builder source,
+the embedding model, and the right Python environment, and the pod already has connectivity to the user
 knowledge-base PostgreSQL. You only need a manifest of repositories to ingest and `kubectl exec` access to
 the global cluster.
 
@@ -25,14 +28,16 @@ The smart-doc builder turns a list of Git repositories into a vectorised knowled
    (the same one already configured for the running Hyperflux plugin) to generate a one-paragraph summary and
    a few representative questions per document. Output: `documents.json`.
 2. **Embed** — load the `gte-multilingual-base` embedding model, embed both the chunks and the per-document
-   summaries, and write them to `docvec_sys_kb` as a LangChain PGVector collection.
+   summaries, and write them to the user-knowledge-base PostgreSQL (`docvec_user_kb`) under the collection
+   name the running server reads (`user_defined_kb` by default).
 
-A third operation — switching the running server to read your new collection — is a one-line chart edit
-covered in Step 6 below.
+Once embedded, the running server picks up the new content **on the next query** — no chart edit, no pod
+restart. The system knowledge base is untouched.
 
-> **NOTE:** The BM25 index used by hybrid retrieval is **not** built by the embed step. The bundled production
-> dumps include a pre-built `idx_bm25_embedding`, and the chart's init container rebuilds it on the upgrade
-> swap path. A custom collection built in-pod has no BM25 index unless you create one — see Step 6.
+> **NOTE:** The BM25 index used by hybrid retrieval is **not** built by the embed step. The bundled system-KB
+> dumps include a pre-built BM25 index, but the user-KB database is created empty during install. If your
+> deployment has hybrid retrieval enabled (the default), you must create the BM25 index on the user-KB
+> collection once — see Step 6.
 
 ## Prerequisites
 
@@ -161,20 +166,23 @@ Stay in the same shell (so the env vars from Step 3 are still in effect):
 ```bash
 python /opt/packages/emb_builder/smart_doc_builder.py embed \
   --from-json /tmp/documents.json \
-  --collection-name <your-collection-name> \
+  --pg-conn-str "${PG_USER_KB_CONN_STR}" \
+  --collection-name user_defined_kb \
   --vector-types chunk,doc_summary \
   --min-chunk-size 600 --max-chunk-size 2000 --chunk-overlap 200
 ```
 
 The chart already exports `EMB_MODEL_NAME=/opt/gte-multilingual-base`, `DEVICE=cpu`, and
-`PG_SYS_KB_CONN_STR` (pointing at `docvec_sys_kb`), so you don't need to pass `--emb-model`,
-`--device`, or `--pg-conn-str`.
+`PG_USER_KB_CONN_STR` (pointing at the user-KB database `docvec_user_kb`), so you don't need to pass
+`--emb-model` or `--device`. Pass `--pg-conn-str "${PG_USER_KB_CONN_STR}"` explicitly because the script's
+default is the system-KB connection string (`PG_SYS_KB_CONN_STR`).
 
 What the flags do:
 
 | Flag | Recommendation |
 |---|---|
-| `--collection-name` | The name your custom corpus will be stored under in `langchain_pg_collection`. Pick something descriptive and date-stamped (e.g. `my-runbooks-20260512`). You'll point the running server at this name in Step 6. |
+| `--pg-conn-str "${PG_USER_KB_CONN_STR}"` | Targets the user knowledge-base database. **Do not** point at `PG_SYS_KB_CONN_STR` unless you are deliberately trying to replace the bundled product knowledge base (see "Replacing the system knowledge base" below). |
+| `--collection-name user_defined_kb` | The collection name the running server reads from `docvec_user_kb`. Use this exact value unless you've overridden `PG_USER_KB_COLLECTION_NAME` for the server. |
 | `--vector-types chunk,doc_summary` | Multi-vector: each doc contributes both chunk vectors and a doc-level summary vector. Matches the production retrieval shape — leave it on. |
 | `--min-chunk-size` / `--max-chunk-size` / `--chunk-overlap` | `600 / 2000 / 200` matches the bundled `cs2000` dump. Use `--max-chunk-size 3000` to match the `cs3000` variant. Larger chunks slightly help recall on long-form docs but use more tokens per answer. |
 
@@ -198,24 +206,22 @@ from inside the same shell:
 
 ```bash
 python -m evaluator.src --layer retrieval --strategy hybrid_rrf \
-  --collection-name <your-collection-name> \
+  --pg-conn-str "${PG_USER_KB_CONN_STR}" \
+  --collection-name user_defined_kb \
   --k 5
 ```
 
 Look for `Recall@5 ≥ 0.80` and `MRR@5 ≥ 0.55` as a sanity baseline; the bundled ACP corpora hit per-repo
 macro `Recall@5 ≈ 0.91` on hybrid retrieval (`reports/2026-05-08/SUMMARY.md`).
 
-## Step 6 — Switch the running server to your collection
+## Step 6 — Create the BM25 index on the user knowledge base (one-time)
 
-Two things have to happen for hybrid retrieval to actually use your custom collection: (a) point
-`PG_COLLECTION_NAME` at it, and (b) make sure a BM25 index exists on the new collection.
-
-### 6a. Create the BM25 index
-
-Still inside the smart-doc pod, run:
+The user-KB database is created empty during install — unlike the bundled system-KB dumps, it does not ship
+with a BM25 index pre-built. If hybrid retrieval is enabled (the default), create the index once after your
+first embed run:
 
 ```bash
-psql "${PG_SYS_KB_CONN_STR}" -c "
+psql "${PG_USER_KB_CONN_STR}" -c "
   CREATE INDEX IF NOT EXISTS langchain_pg_embedding_bm25_idx
     ON langchain_pg_embedding
     USING bm25 (id, document)
@@ -223,57 +229,62 @@ psql "${PG_SYS_KB_CONN_STR}" -c "
 "
 ```
 
-This matches what the chart's init container creates on the upgrade swap path
-(`init-database.sh:198-214`). Without it, the `enableBm25` retrieval path silently falls back to
-dense-only.
+Without this index, the hybrid-retrieval path silently falls back to dense-only on the user KB (which still
+returns results, just without exact-keyword recall).
 
-### 6b. Update the chart
-
-Set `pgconnect.pgCollectionName` to your collection name, either via `helm upgrade --set` or via the install
-form's advanced YAML editor:
-
-```yaml
-pgconnect:
-  pgCollectionName: <your-collection-name>
-```
-
-Roll the smart-doc deployment. The init container's swap rules don't fire because your custom collection
-name doesn't appear as the OLD field in any `acpKbUpgradeRules` line — the swap is mpnet→gte-only by default.
-Once the new pod is Ready, run a representative question through the chat UI to confirm answers are grounded
-in the new corpus.
+That's it — there is **no chart edit and no pod restart** required. The running server already reads from
+`docvec_user_kb` / `user_defined_kb` on every query, so your custom corpus starts contributing to answers
+immediately. Run a representative question through the chat UI to confirm.
 
 ## (Optional) Multi-cluster: dump and restore
 
-If you want to build the corpus once and push it to several clusters, take a `pg_dump` after Step 4 and
-restore it on each target cluster:
+If you want to build the corpus once and push it to several clusters, take a `pg_dump` of the user KB after
+Step 4 and restore it on each target cluster:
 
 ```bash
 # --- on the source cluster, inside the smart-doc pod ---
-pg_dump "${PG_SYS_KB_CONN_STR}" -Fc -f /tmp/<your-collection-name>.dump
+pg_dump "${PG_USER_KB_CONN_STR}" -Fc -f /tmp/user_kb.dump
 
 # --- on the workstation ---
 kubectl -n cpaas-system cp \
-  "${POD}:/tmp/<your-collection-name>.dump" \
-  ./<your-collection-name>.dump
+  "${POD}:/tmp/user_kb.dump" \
+  ./user_kb.dump
 
 # --- for each target cluster ---
 TARGET_POD=$(kubectl -n cpaas-system get pod -l app=smart-doc \
   -o jsonpath='{.items[0].metadata.name}' --context <target-context>)
 
 kubectl -n cpaas-system --context <target-context> cp \
-  ./<your-collection-name>.dump \
-  "${TARGET_POD}:/tmp/<your-collection-name>.dump" -c serve
+  ./user_kb.dump \
+  "${TARGET_POD}:/tmp/user_kb.dump" -c serve
 
 kubectl -n cpaas-system --context <target-context> exec -it \
   "${TARGET_POD}" -c serve -- bash -c \
-  "pg_restore -d \"\${PG_SYS_KB_CONN_STR}\" /tmp/<your-collection-name>.dump"
+  "pg_restore -d \"\${PG_USER_KB_CONN_STR}\" /tmp/user_kb.dump"
 ```
 
-Then perform Step 6 (BM25 index + chart switch) on each target cluster.
+Then perform Step 6 (BM25 index) on each target cluster — the index is per-database and doesn't survive a
+restore-into-empty-DB on its own (a restore into a populated DB merges BM25 if present in the dump; for a
+fresh user KB, run the `CREATE INDEX` after the restore).
 
-The dump captures both `langchain_pg_collection` and `langchain_pg_embedding`, so on the target the
-collection is named whatever you used in Step 4. No rename step is needed unless you want a different name on
-the target.
+> **NOTE:** `pg_restore` of the user-KB dump into a target cluster that already has user-KB content (e.g.,
+> previous BYO uploads) will conflict on the langchain table CREATEs. For a clean overlay, use the chart's
+> swap mechanism instead, or first drop and recreate `docvec_user_kb` on the target. Plain `pg_restore` is
+> safest only when the target user KB is empty.
+
+## Replacing the bundled system knowledge base (advanced)
+
+The workflow above adds to the user KB and leaves the bundled product knowledge intact. If you have a
+different requirement — for example, the bundled Alauda product docs are wrong for your environment and you
+want to **replace** them with an in-house variant — repeat the same in-pod workflow but target the system KB:
+
+- `--pg-conn-str "${PG_SYS_KB_CONN_STR}"`
+- `--collection-name <your-system-kb-collection-name>`
+- Update `pgconnect.pgCollectionName` in the chart to point at your collection name and re-roll.
+
+This path requires a chart edit and disables automatic system-KB upgrades on future Hyperflux releases (the
+auto-swap rule scan won't match your custom collection name). Use it only if user-KB augmentation isn't
+enough.
 
 ## Re-roll cadence
 
@@ -281,26 +292,35 @@ Custom knowledge bases drift faster than product documentation. Plan to re-run *
 schedule that matches your source repos:
 
 - Daily-changing runbooks → nightly cron (a Kubernetes `CronJob` that runs the same in-pod commands as a
-  one-shot init container) targeting a date-stamped collection name (`my-runbooks-20260512`,
-  `my-runbooks-20260513`, …) so you can roll back by just switching `pgconnect.pgCollectionName`.
+  one-shot job) re-embedding into the same `user_defined_kb` collection.
 - Quarterly architecture docs → manual re-roll on each release boundary.
 
-If you re-run embed against the **same** collection name, `langchain_pg_embedding`'s deterministic row IDs
-(`make_row_id` at `smart_doc_builder.py:38-48`) cause unchanged chunks to upsert idempotently and changed
-chunks to overwrite — but rows for documents that were *removed* from the manifest become orphans until you
-recreate the collection. For a clean replacement, embed into a fresh collection name and switch via Step 6b.
+Re-running embed against the **same** collection name uses deterministic row IDs (`make_row_id` at
+`smart_doc_builder.py:38-48`), so unchanged chunks upsert idempotently and changed chunks overwrite — but
+rows for documents that were *removed* from the manifest become orphans. For a clean replacement, drop and
+recreate the collection before re-embedding:
+
+```bash
+psql "${PG_USER_KB_CONN_STR}" -c "
+  DELETE FROM langchain_pg_embedding
+  WHERE collection_id = (SELECT uuid FROM langchain_pg_collection WHERE name='user_defined_kb');
+  DELETE FROM langchain_pg_collection WHERE name='user_defined_kb';
+"
+```
+
+Then re-run Step 4 to repopulate, and re-run Step 6 (BM25 index) — the BM25 index is dropped with the
+table.
 
 ## Caveats
 
-- **Single-collection per `docvec_sys_kb`.** The chart's swap mechanism (used on Hyperflux upgrades) drops
-  the entire `langchain_pg_collection` table when it fires, so multiple collections can technically coexist
-  in `docvec_sys_kb` but only one survives the next chart upgrade. If you want both ACP product knowledge
-  and your internal docs, ingest both repo sets into the same `prepare` run so the resulting collection
-  contains both.
-- The user-facing **BYO Knowledge Tool** (introduced in v1.3.1) targets the user knowledge-base database
-  (`docvec_user_kb`), not the system KB this guide writes to, so it is unaffected by this workflow. Use BYO
-  Knowledge for end-user document uploads, and use this guide for admin-curated corpora baked into the
-  deployment.
+- **The custom corpus shares the user KB with BYO Knowledge tool uploads.** Files end users upload through
+  the chat UI (introduced in v1.3.1) land in the same `user_defined_kb` collection as your admin-curated
+  corpus. They coexist as long as URLs don't collide; in practice this is fine because BYO uploads use a
+  distinct URL scheme. If you ever drop and recreate the collection (Re-roll cadence section), BYO uploads
+  in that collection are wiped along with your corpus — back them up first if you care about them.
+- **System KB version filters do not apply to the user KB.** When a user asks a version-specific question
+  (e.g., about ACP 4.3), the system KB is filtered to that version but the user KB returns matches across
+  all versions. If your custom corpus is multi-version, expect cross-version chunks to surface in answers.
 - **Embedding-model mismatch** is the most common silent failure: vectors built with anything other than the
   in-pod `/opt/gte-multilingual-base` will be retrievable but always score near zero, so answers collapse to
   "I don't have enough information" without an obvious error. The in-pod workflow described here uses the
