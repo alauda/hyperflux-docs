@@ -87,7 +87,7 @@ The install form is grouped below by topic. Required fields are marked **(requir
 - **Enable builtin PGVector** — when enabled, the chart provisions a single PostgreSQL + ParadeDB instance for Alauda Hyperflux. Set:
     - **PGVector Storage Size** — the storage size for the PostgreSQL PVC (e.g. `10Gi`).
     - **PGVector StorageClass name** — the Kubernetes storage class for the PVC, e.g. `sc-topolvm`.
-- When **disabled**, create a `Secret` with the external PostgreSQL connection info instead. Hyperflux uses three logical databases on the same instance — `docvec_sys_kb` (built-in product knowledge base), `docvec_user_kb` (user-uploaded BYO Knowledge), and `docvec_kb` (chat history) — all created automatically by the init container if missing.
+- When **disabled**, create a `Secret` (referenced via **pg database secret name**) with the external PostgreSQL connection info instead. Hyperflux uses three logical databases on the same instance — `docvec_sys_kb` (built-in product knowledge base), `docvec_user_kb` (user-uploaded knowledge base), and the chat-history database (defaults to `docvec`, configurable via **PG database name**) — all created automatically by the init container if missing.
     ```yaml
     apiVersion: v1
     kind: Secret
@@ -105,9 +105,9 @@ The install form is grouped below by topic. Required fields are marked **(requir
     Then enter the secret name in **pg database secret name**.
 - **PG database name** — the chat-history database name (default `docvec`). Created on first start if missing.
 - **PG collection name** — the LangChain PGVector collection name used by the server. The default value matches the bundled gte-multilingual-base dump and **should not be changed** unless you are deploying a custom KB built with [Build a Custom Knowledge Base](build-custom-kb.mdx).
-- **Built-in KnowledgeBase File** — choose which built-in dump to restore on first start:
-    - `docvec_gte_cs2000_<date>.dump` (default) — chunk size 2000, balanced recall and answer focus.
-    - `docvec_gte_cs3000_<date>.dump` — chunk size 3000, slightly better recall on long-form documents at the cost of larger context per hit.
+- **Built-in KnowledgeBase File** — choose which built-in dump to restore on first start. The selector currently offers:
+    - `docvec_gte_cs2000_20260410.dump` (default) — chunk size 2000, balanced recall and answer focus.
+    - `docvec_gte_cs3000_20260410.dump` — chunk size 3000, slightly better recall on long-form documents at the cost of larger context per hit.
 - **Enable builtin Redis** — when enabled, the chart provisions a single Redis instance used by the rate limiter. When disabled, supply a Redis credentials secret in **redis database secret name**.
 
 ### Scheduling
@@ -135,6 +135,7 @@ The install form is grouped below by topic. Required fields are marked **(requir
 - **Enable Agent Mode (required)** — turn on multi-step reasoning so the agent can call MCP tools. **Recommended:** use a strong LLM (≥ GPT-4 / Qwen-72B class) when this is on; smaller models can loop or misuse tools.
 - **Enable MCP Tools** — load ACP MCP tools so the agent can read live cluster state. Only available when Agent Mode is on.
 - **Expose MCP** — expose the bundled `acp-mcp-server` over Ingress so external MCP clients (e.g. IDE-side coding agents) can reach it. Only available when Agent Mode is on.
+- The bundled `acp-mcp-server` deployment itself is controlled by `smartdoc.enableMCPServer` (defaults to `true`); leave it on whenever Agent Mode is on.
 
 > **NOTE:** Earlier versions required setting an "MCP K8s API Server Address" (the `erebus` URL). That field has been
 > removed in v1.4.0 — the bundled `acp-mcp-server` now talks to the cluster directly inside the global cluster, and
@@ -161,11 +162,11 @@ The install form is grouped below by topic. Required fields are marked **(requir
 - **Max Input Tokens Per Day** — per-user input token cap, default `200000`.
 - **Max Output Tokens Per Day** — per-user output token cap, default `1000000`.
 
-Click **Install** to start installation. The init container will:
+Click **Install** to start installation. On first start the init container will:
 
-1. Create the three logical databases (`docvec_sys_kb`, `docvec_user_kb`, `docvec_kb`) if missing.
-2. Restore the selected built-in dump into `docvec_sys_kb`.
-3. Apply schema migrations and ensure the BM25 index exists.
+1. Restore the selected built-in dump into `docvec_sys_kb` (the dump already includes the BM25 index).
+2. Create the chat-history database and `docvec_user_kb` if they don't exist.
+3. Apply the `doc_id` btree index and URL-backfill schema migrations to both KB databases.
 
 ## Troubleshooting
 

@@ -8,87 +8,57 @@ weight: 40
 
 ### Features and Enhancements
 
-#### **New embedding model: gte-multilingual-base**
+#### **Improved retrieval quality**
 
-The bundled knowledge base has been re-embedded with Alibaba's `gte-multilingual-base` model, replacing
-`paraphrase-multilingual-mpnet-base-v2`. Cross-language retrieval (e.g., a Chinese question against English
-docs) is substantially better, and recall@5 on the bundled ACP corpora rises to ≈ 0.82 with hybrid retrieval.
-Existing v1.3.x deployments are migrated automatically — see the [Upgrade guide](../upgrade/index.mdx).
+The bundled knowledge base has been re-embedded with a stronger model, substantially improving answer relevance — including cross-language retrieval (for example, asking a question in Chinese against English documentation). Existing v1.3.x deployments are migrated automatically during the upgrade — see the [Upgrade guide](../upgrade/index.mdx).
 
-#### **Hybrid retrieval (BM25 + dense vector)**
+#### **Hybrid keyword and semantic retrieval**
 
-A ParadeDB `pg_search` BM25 index is now built alongside the dense vector index, and answers are retrieved
-using a Reciprocal Rank Fusion (RRF) of both signals. This recovers exact-keyword matches that pure semantic
-search misses (CRD names, command flags, error strings). Configurable via `enableBm25`, `bm25Weight`, `bm25K`.
+Answers are now retrieved using a combination of semantic similarity and keyword matching, then fused into a single ranking. This recovers exact-keyword matches that pure semantic search misses — such as CRD names, command flags, and error strings — without giving up the ability to answer natural-language questions.
 
-#### **Multi-vector retrieval**
+#### **Document-level retrieval**
 
-Each document now contributes both per-chunk vectors and an LLM-generated document-level summary vector. This
-lets a question about a doc's overall topic match the doc as a whole instead of needing the user's wording to
-overlap with any specific chunk.
+Each document is now indexed at the document level in addition to its individual sections. Questions about a document's overall topic now find the right document even when the user's wording doesn't overlap with any specific paragraph.
 
-#### **Built-in knowledge base file selector**
+#### **Built-in knowledge base preset selection**
 
-During install / edit, choose between `docvec_gte_cs2000_<date>.dump` (default; chunk size 2000) and
-`docvec_gte_cs3000_<date>.dump` (chunk size 3000, slightly better recall on long-form docs).
+The installation page now offers a choice between two presets for the bundled knowledge base. The default works well for most queries; the larger preset can give slightly better recall on questions that span long-form documents.
 
-#### **Auto knowledge-base data swap on upgrade**
+#### **Automatic knowledge-base upgrade**
 
-The init container detects legacy mpnet collections in `docvec_sys_kb` and atomically swaps them to the new
-gte dump in place — keeping the original collection name so `pgconnect.pgCollectionName` does not have to
-change. Idempotent (per-data-version stamp), multi-replica safe (PostgreSQL advisory lock), and crash-safe
-(in-flight `kb_swap_state` row recovers on restart).
+Upgrading from v1.3.x to v1.4.x migrates the bundled knowledge base automatically. No manual database export, import, or restart step is required — see the [Upgrade guide](../upgrade/index.mdx).
 
 #### **Conversation history compression**
 
-When a session approaches the LLM context window, older turns are summarised by the LLM before being re-fed
-to the prompt. Tunable via `enableHistoryCompression`, `historyBudgetRatio`, `historyKeepRecent`,
-`toolOutputTruncateChars`, and `modelContextWindow`. Reduces token cost on long agent-mode conversations
-without losing earlier context.
+Long conversations are automatically summarised so they fit within the LLM's context window without losing earlier turns. This reduces token cost on extended agent-mode sessions and lets users continue an investigation across many messages without quality degradation.
 
-#### **Service-to-service API key authentication (HMAC-SHA256)**
+#### **Service-to-service API key authentication**
 
-A new `apiKey` / `apiKeyHeader` / `apiKeyMaxTimeDiff` set lets external services call the smart-doc API
-without going through the OAuth proxy. Tokens are HMAC of `<username>:<unix_ts>`, so the shared key never
-travels on the wire. Disabled by default — leave `apiKey` empty unless you need it.
+External services can now call the Smart Doc API directly using a signed token, without going through the OAuth login flow. This unlocks integration scenarios such as nightly batch jobs and custom dashboards. Disabled by default — enable it during installation only when needed.
 
-#### **MCP server exposed via Ingress**
+#### **External access to the MCP server**
 
-The Agent Mode now talks to the bundled `acp-mcp-server` over the cluster-local service, and external MCP
-clients (e.g., IDE-side coding agents) can reach it through Ingress (toggled by **Expose MCP**). The previous
-"MCP K8s API Server Address" install field — which required users to construct an `erebus` URL by hand — has
-been removed.
+The Agent Mode's MCP server can now be exposed through Ingress so that MCP clients running outside the cluster — such as IDE-side coding agents — can reach it. The previous "MCP K8s API Server Address" install field is no longer needed and has been removed.
 
-#### **Documentation: Build a Custom Knowledge Base**
+#### **Build a Custom Knowledge Base**
 
-A new guide walks admins through ingesting internal Git repositories into the Hyperflux knowledge base, with
-two delivery modes (chart-managed swap or manual `pg_restore`). See
-[Build a Custom Knowledge Base](../build-custom-kb.mdx).
+A new guide walks administrators through ingesting internal Git repositories into the Hyperflux knowledge base, so Hyperflux can answer questions grounded in private runbooks, design documents, or other internal references. See [Build a Custom Knowledge Base](../build-custom-kb.mdx).
 
 ### Improvements
 
-- **PostgreSQL 18 + ParadeDB upgrade.** Bundled vector image is now `mlops/paradedb:0.22.6-pg18`, bringing pg18
-  performance and the latest `pg_search`.
-- **Tool output truncation.** MCP tool outputs are truncated to a configurable character count
-  (`toolOutputTruncateChars`, default 500) before being re-injected into the LLM context, reducing token cost
-  on verbose K8s responses.
-- **Init container extracted from inline bash** to `init-database.sh` (shipped via ConfigMap) for easier
-  auditing and customisation.
-- **Switched the PG driver from pg8000 to psycopg** with TCP keepalives enabled, eliminating a class of
-  long-lived-connection drops behind LB / NAT.
-- **Built-in dump now ships inside the plugin package**, removing the separate "download dump file" step that
-  was required up through v1.2.x.
+- Reduced token cost on agent-mode answers when tools return long output (such as logs or large resource definitions).
+- Improved storage performance on the bundled knowledge-base database.
+- Reduced occasional database disconnect errors in network setups with long-lived connection drops (load balancers, NAT).
+- The bundled knowledge-base file now ships inside the plugin package — no separate download step is required during installation.
 
 ### Breaking Changes
 
-- **Custom knowledge bases built on v1.3.x must be re-embedded** with `gte-multilingual-base` before upgrading.
-  See the [Upgrade guide](../upgrade/index.mdx) special-case section.
-- **`MCP K8s API Server Address` install field has been removed.** Existing values are ignored on upgrade.
+- **Custom knowledge bases built under v1.3.x must be rebuilt before upgrading.** The new embedding model is incompatible with the previous one, so existing custom corpus data will not be usable until rebuilt. See the [Build a Custom Knowledge Base](../build-custom-kb.mdx) guide for the new procedure.
+- **The "MCP K8s API Server Address" install field has been removed.** Existing values are ignored on upgrade; MCP is now reachable through the bundled MCP server.
 
 ### Known Limitations
 
-- The auto KB swap only touches `docvec_sys_kb`. The `docvec_user_kb` (BYO Knowledge) database is preserved
-  unchanged across upgrades.
+- Documents you uploaded via the BYO Knowledge tool are preserved unchanged across the v1.4.0 upgrade — only the bundled product knowledge base is refreshed.
 
 ## v1.3.1
 
