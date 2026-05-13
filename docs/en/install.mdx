@@ -144,7 +144,7 @@ The install form is grouped below by topic. Required fields are marked **(requir
 ### Retrieval (RAG) tuning
 
 - **Total Search K (required)** — number of candidates to fetch from the knowledge base before reranking, default `20`.
-- **RAG Similarity Threshold (required)** — minimum cosine similarity for a chunk to be kept, default `0.81`. Lower values trade precision for recall.
+- **RAG Similarity Threshold (required)** — minimum cosine similarity for a chunk to be kept, default `0.8`. Lower values trade precision for recall.
 - **Cohere Reranker Top N (required)** — number of top-ranked chunks fed to the LLM after reranking, default `6`. Only applied when reranking is on.
 - **Max History Number (required)** — number of previous turns kept in the prompt, default `1`.
 - **Model Context Window** — total context window of the LLM in tokens (e.g. `128000`). Leave empty to auto-detect by model name; the conversation-history compressor uses this to decide when to summarise older turns.

@@ -24,21 +24,17 @@ Each document is now indexed at the document level in addition to its individual
 
 The installation page now offers a choice between two presets for the bundled knowledge base. The default works well for most queries; the larger preset can give slightly better recall on questions that span long-form documents.
 
-#### **Automatic knowledge-base upgrade**
+#### **Bundled knowledge base refresh during upgrade**
 
-Upgrading from v1.3.x to v1.4.x migrates the bundled knowledge base automatically. No manual database export, import, or restart step is required — see the [Upgrade guide](../upgrade/index.mdx).
+Upgrading from v1.3.x to v1.4.x replaces the bundled product knowledge base with the new GTE-embedded dump and migrates per-document metadata automatically. No manual database export, import, or restart step is required — see the [Upgrade guide](../upgrade/index.mdx). Custom and BYO knowledge bases are not touched by this step (see Breaking Changes and Known Limitations below).
 
 #### **Conversation history compression**
 
 Long conversations are automatically summarised so they fit within the LLM's context window without losing earlier turns. This reduces token cost on extended agent-mode sessions and lets users continue an investigation across many messages without quality degradation.
 
-#### **Service-to-service API key authentication**
+#### **Agent Mode and MCP tool loading can now be configured independently**
 
-External services can now call the Smart Doc API directly using a signed token, without going through the OAuth login flow. This unlocks integration scenarios such as nightly batch jobs and custom dashboards. Disabled by default — enable it during installation only when needed.
-
-#### **External access to the MCP server**
-
-The Agent Mode's MCP server can now be exposed through Ingress so that MCP clients running outside the cluster — such as IDE-side coding agents — can reach it. The previous "MCP K8s API Server Address" install field is no longer needed and has been removed.
+Agent Mode (multi-step reasoning) and ACP MCP tool loading are now controlled by separate install switches. You can turn on Agent Mode without loading the ACP MCP tools — for example, when the LLM should plan over the bundled knowledge base alone — and turn the tools back on when live cluster operations are required.
 
 #### **Build a Custom Knowledge Base**
 
@@ -48,13 +44,10 @@ A new guide walks administrators through ingesting internal Git repositories int
 
 - Reduced token cost on agent-mode answers when tools return long output (such as logs or large resource definitions).
 - Improved storage performance on the bundled knowledge-base database.
-- Reduced occasional database disconnect errors in network setups with long-lived connection drops (load balancers, NAT).
-- The bundled knowledge-base file now ships inside the plugin package — no separate download step is required during installation.
 
 ### Breaking Changes
 
 - **Custom knowledge bases built under v1.3.x must be rebuilt before upgrading.** The new embedding model is incompatible with the previous one, so existing custom corpus data will not be usable until rebuilt. See the [Build a Custom Knowledge Base](../build-custom-kb.mdx) guide for the new procedure.
-- **The "MCP K8s API Server Address" install field has been removed.** Existing values are ignored on upgrade; MCP is now reachable through the bundled MCP server.
 
 ### Known Limitations
 
