@@ -65,29 +65,20 @@ Create a JSON manifest listing every Git repository you want to ingest. Save it 
   "kb_version": "1.0",
   "repos": [
     {
-      "git_repo": "https://gitlab.example.com/sre/runbooks",
-      "branch": "main",
-      "doc_version": "2026.05",
-      "title": "SRE Runbooks",
-      "doc_url_template": "/runbooks/{{ABSOLUTE_URL.split('/docs/en/')[-1].replace('.mdx','.html').replace('.md','.html')}}",
-      "origin": "internal",
-      "split_type": "title,chunk",
-      "doc_type": "md,mdx"
-    },
-    {
-      "git_repo": "https://github.com/myorg/architecture-decisions",
+      "git_repo": "https://github.com/myorg/internal-docs",
       "branch": "main",
       "doc_version": "1.0",
-      "title": "Architecture Decisions",
-      "doc_url_template": "/adr/{{ABSOLUTE_URL.split('/docs/en/')[-1].replace('.md','.html')}}",
+      "title": "Internal Docs",
+      "doc_url_template": "/internal-docs/{{ABSOLUTE_URL.split('/docs/en/')[-1].replace('.mdx','.html').replace('.md','.html')}}",
       "origin": "internal",
       "sub_dirs": ["docs/en"],
-      "split_type": "title,chunk",
       "doc_type": "md,mdx"
     }
   ]
 }
 ```
+
+Add more `repos` entries to ingest multiple repositories in a single run.
 
 Field reference:
 
@@ -100,7 +91,6 @@ Field reference:
 | `doc_url_template` | Jinja template producing the relative URL for each doc; concatenated with `ONLINE_DOC_BASE_URL` at retrieval time. The `ABSOLUTE_URL` variable is the doc's local absolute path. |
 | `origin` | Free-form bucket label (e.g., `internal`, `ACP`). |
 | `sub_dirs` | Optional — only ingest these subdirectories of the repo. |
-| `split_type` | `title`, `chapter`, `chunk`, or any combination joined by `,`. The bundled ACP KB uses `title,chunk`. |
 | `doc_type` | `md`, `mdx`, or `md,mdx`. |
 | `kb_version` | Stamped on every chunk under `metadata.version`; used to sanity-check that all chunks in a dump came from the same prepare run. |
 
@@ -138,12 +128,14 @@ export GIT_TOKEN=<your-git-token>
 # export GITHUB_TOKEN=<your-github-token>
 
 # Optionally override the LLM endpoint for this session if the chart-default
-# one is rate-limited. All five vars must be set together.
+# one is rate-limited. The builder uses langchain's AzureChatOpenAI, so the
+# Azure-style env vars below are honoured; AZURE_OPENAI_API_VERSION defaults
+# to "2024-12-01-preview" if you omit it.
 # export LLM_BASE_URL=...
 # export LLM_API_KEY=...
 # export LLM_MODEL_NAME=...
-# export AZURE_OPENAI_API_VERSION=...
 # export AZURE_OPENAI_DEPLOYMENT_NAME=...
+# export AZURE_OPENAI_API_VERSION=...      # optional
 
 python /opt/packages/emb_builder/smart_doc_builder.py prepare \
   --config /tmp/my-kb.json
@@ -184,7 +176,7 @@ What the flags do:
 | `--pg-conn-str "${PG_USER_KB_CONN_STR}"` | Targets the user knowledge-base database. **Do not** point at `PG_SYS_KB_CONN_STR` unless you are deliberately trying to replace the bundled product knowledge base (see "Replacing the system knowledge base" below). |
 | `--collection-name user_defined_kb` | The collection name the running server reads from `docvec_user_kb`. Use this exact value — the chart does not currently expose a way to change the user-KB collection name the server reads. |
 | `--vector-types chunk,doc_summary` | Multi-vector: each doc contributes both chunk vectors and a doc-level summary vector. Matches the production retrieval shape — leave it on. |
-| `--min-chunk-size` / `--max-chunk-size` / `--chunk-overlap` | `600 / 2000 / 200` matches the bundled `cs2000` dump. Use `--max-chunk-size 3000` to match the `cs3000` variant. Larger chunks slightly help recall on long-form docs but use more tokens per answer. |
+| `--min-chunk-size` / `--max-chunk-size` / `--chunk-overlap` | Defaults are `600 / 0 / 200` (the embed `--help` output); `--max-chunk-size 0` means header-only split with no upper bound. Set an upper bound like `2000`–`3000` if you want every long-form document re-split into smaller chunks. Larger chunks slightly help recall on long-form docs but use more tokens per answer. |
 
 > **WARNING:** When `--vector-types` includes `doc_summary` but `documents.json` was produced by a `prepare`
 > run that didn't have `ENABLE_GEN_QUESTIONS=true` set, embed silently emits **zero** summary vectors and
@@ -293,8 +285,9 @@ psql "${PG_USER_KB_CONN_STR}" -c "
 "
 ```
 
-Then re-run Step 4 to repopulate, and re-run Step 5 (BM25 index) — the BM25 index is dropped with the
-table.
+Then re-run Step 4 to repopulate. The BM25 index on `langchain_pg_embedding` continues to apply to the new
+rows automatically, so you do **not** need to re-run Step 5 — unless you also dropped the database itself
+(e.g., for the multi-cluster `pg_restore` overlay above).
 
 ## Caveats
 
