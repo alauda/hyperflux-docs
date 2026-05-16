@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "generator_version": 3,
+  "project_name": "Hyperflux Docs",
+  "summary": "Documentation for Alauda Hyperflux / Container Platform (ACP).",
+  "generated_at": "2026-05-16T10:38:10Z",
+  "include_patterns": [
+    "**/*.md",
+    "**/*.mdx"
+  ],
+  "exclude_patterns": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.yarn/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.llmstxt-cache/**",
+    "**/llms.txt",
+    "**/CHANGELOG.md",
+    "**/CONTRIBUTING.md",
+    "apis_example_bak/**",
+    ".llmstxt-cache/**",
+    "llms.txt",
+    "llmstxt-state.json",
+    "**/llmstxt-state.json"
+  ],
+  "grouping_base_path": ".",
+  "description_max_words": 150,
+  "files": {
+    "README.md": {
+      "sha256": "f0c8d80339ee2a735d64288297156ad36ace501ae73f23d9f501e08b024195e5",
+      "size": 809,
+      "description": "Contributor README for the hyperflux-docs site itself, documenting the local toolchain: Node.js plus npm, dependency install via `yarn install`, and the `yarn dev`, `yarn build`, and `yarn serve` scripts for live preview, production build to `dist/`, and static serving. Notes that left-navigation changes require restarting the dev server and recommends VS Code with the MDX extension for authoring.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/index.mdx": {
+      "sha256": "ea8d719fb06b69c8f8fa90c79d3ec2a67457c854f2c664fb78f523febe3f6960",
+      "size": 48,
+      "description": "Top-level English-docs entry point rendered as a navigation hub via the `<Overview overviewHeaders={[]} />` MDX component; contains no prose content and acts purely as a routing/index page that lists the child sections of the Alauda Hyperflux documentation tree.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/install.mdx": {
+      "sha256": "4b2ef94b0bfb2dd8d214510b454c3c37f1522b6ed40939b8103d35abfb2a5a31",
+      "size": 7473,
+      "description": "Step-by-step installation guide for the Alauda Hyperflux cluster plugin on ACP. Covers downloading the `alauda-hyperflux-<version>.tar.gz` package from the Customer Portal, pushing images with the `violet` CLI (including external-registry credentials), preparing an LLM service (Azure OpenAI or on-prem vLLM) and an optional Cohere-compatible rerank service, installing into the Global cluster via Marketplace / Cluster Plugins, configuring the built-in or external PostgreSQL (pg-secret YAML, `cpaas-system` namespace), v1.2.0-only database-dump import using `kubectl cp` and `pg_restore` against the `postgre-vec` pod, experimental Agent mode with the erebus MCP K8s API URL, and troubleshooting via `kubectl logs -l app=smart-doc -c serve`.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/overview/index.mdx": {
+      "sha256": "f2173503b518976d2ce0b364648e0aec87c10f0ae2f33957a7f310f0521283fd",
+      "size": 44,
+      "description": "Overview section index page (weight 10) that renders as a stub via the `<Overview />` MDX component, serving as a routing/landing page that surfaces the child Overview pages (Quick Start and Release Notes) rather than carrying its own prose.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/overview/quick_start.mdx": {
+      "sha256": "a301cefb3b834f9379a79e178b1b3d7784c95e377dbf6848ef250b981d9666f5",
+      "size": 995,
+      "description": "Quick Start guide for end users after database import is finished, explaining how to launch the Alauda Hyperflux chat: log into the ACP Web Console, switch to the Container Platform view, and click the chat icon in the bottom-right corner; for ACP 4.0 and 4.1 also lists the standalone URL `https://<YOUR-ACP-ADDRESS>/console-smart-doc/home`. Documents limitations including possible LLM hallucinations, the knowledge base being static after dump import, and the requirement for a powerful model (e.g. GPT-4) when the experimental Agent mode is enabled.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/overview/release_notes.mdx": {
+      "sha256": "40448a8d86cd241937dd57911838bed708178a6bdbfa17673309862687853f87",
+      "size": 4192,
+      "description": "Release notes for Alauda Hyperflux versions v1.3.1, v1.2.1, and v1.2.0. v1.3.1 adds the BYO Knowledge tool for private corpora, multi-cluster question answering by cluster name, per-user token quota limits, conversation history, a LangChain 1.0 upgrade, separated databases for system/user knowledge and chat history, a Redis-based rate limiter, and MCP server OAuth plus writable tool config. v1.2.1 fixes Agent-mode safety (no resource create/delete without confirmation), the `kubeVersion >=1.20.0` incompatibility with Kubernetes v1.33.7-1, plaintext API-key leakage at deploy time, and ACP 4.2+ node-taint handling. v1.2.0 introduces RAG-by-default, database-dump bootstrap, external PGVector connection, Cohere Reranker support, and experimental Agent mode.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/setup-onprem-rerank.mdx": {
+      "sha256": "e7e48763a5e27c0c83dca9a8f6fcc3304e2f1c0bbaf9d07509944ed82beb5725",
+      "size": 3235,
+      "description": "Procedure for standing up an on-premise reranker for Hyperflux using Alauda AI and vLLM (runtime `>=vllm-0.9.2-cuda-12.6-x86`), e.g. with the `Alibaba-NLP/gte-reranker-modernbert-base` model. Walks through uploading the model, switching the InferenceService YAML editor to override `spec.model.command` with a `vllm serve ${MODEL_PATH} --task score --port 8080` startup script (including GPU count check, single-file GGUF detection, and `ENABLE_CHUNKED_PREFILL` / `ENFORCE_EAGER` flag handling), exposing it across clusters via NodePort/Ingress/AI Gateway, and pointing Hyperflux at it by editing the Cohere Reranker BaseUrl, Model, and (placeholder) API key fields before the smart-doc container restarts.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    },
+    "docs/en/upgrade/index.mdx": {
+      "sha256": "b55fdde78ea2b9d1c9ad516525c0e348ad8b4566b06787dcf2ce81ba855ce990",
+      "size": 3117,
+      "description": "Upgrade runbook for Alauda Hyperflux. Standard path: upload the new plugin tarball under Administrator / Marketplace / Upload Packages, wait 10-15 minutes for sync, then trigger upgrade from Administrator / Clusters / Clusters under the cluster's Features tab on the Hyperflux plugin card. Special-cases the v1.2.0 to v1.2.1 jump, which re-initializes the knowledge base and therefore requires a manual `pg_dump -F c` backup from the `postgre-vec` pod to `hyperflux_backup.dump`, the standard plugin upgrade, then `pg_restore` plus an optional `kubectl edit configmap smart-doc-config` to update `PG_CONN_DB` and `PG_COLLECTION_NAME`.",
+      "generation_method": "ai_agent_reading",
+      "updated_at": "2026-05-16T10:38:10Z"
+    }
+  }
+}
