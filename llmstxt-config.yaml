@@ -1,0 +1,28 @@
+# llms.txt Generator Configuration for alauda/hyperflux-docs
+project_name: "Hyperflux Docs"
+summary: "Documentation for Alauda Hyperflux / Container Platform (ACP)."
+
+include_patterns:
+  - "**/*.md"
+  - "**/*.mdx"
+
+exclude_patterns:
+  - "**/node_modules/**"
+  - "**/.git/**"
+  - "**/.yarn/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.llmstxt-cache/**"
+  - "**/llms.txt"
+  - "**/CHANGELOG.md"
+  - "**/CONTRIBUTING.md"
+  - "apis_example_bak/**"
+
+# Start H2 grouping from this relative path.
+grouping_base_path: "."
+
+# Files per batch for AI processing
+batch_size: 15
+
+# Maximum words per generated file description
+description_max_words: 150
