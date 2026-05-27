@@ -104,10 +104,13 @@ The install form is grouped below by topic. Required fields are marked **(requir
     ```
     Then enter the secret name in **pg database secret name**.
 - **PG database name** — the chat-history database name (default `docvec`). Created on first start if missing.
-- **PG collection name** — the LangChain PGVector collection name used by the server. The default value matches the bundled gte-multilingual-base dump and **should not be changed** unless you are deploying a custom KB built with [Build a Custom Knowledge Base](build-custom-kb.mdx).
-- **Built-in KnowledgeBase File** — choose which built-in dump to restore on first start. The selector currently offers:
-    - `docvec_gte_cs2000_20260410.dump` (default) — chunk size 2000, balanced recall and answer focus.
-    - `docvec_gte_cs3000_20260410.dump` — chunk size 3000, slightly better recall on long-form documents at the cost of larger context per hit.
+- **PG collection name** — the LangChain PGVector collection name the server reads from `docvec_sys_kb`. It **must** match the internal collection name of the selected **Built-in KnowledgeBase File**, which by convention is the dump filename without the `.dump` suffix. The default `docvec_gte_acp_4_3_20260508` matches the default dump, so leave it unchanged unless you either (a) select a non-default built-in dump below, or (b) deploy a custom KB built with [Build a Custom Knowledge Base](build-custom-kb.mdx) — in both cases set this to the corresponding dump filename without `.dump`.
+- **Built-in KnowledgeBase File** — choose which built-in dump to restore on first start. Each dump is the Alauda Container Platform (ACP) product-documentation knowledge base captured at a specific ACP release, all embedded with the gte-multilingual-base model. Pick the one matching the ACP version you run; the default is the latest. The selector offers:
+    - `docvec_gte_acp_4_1_20260508.dump` — ACP 4.1 documentation corpus.
+    - `docvec_gte_acp_4_2_20260508.dump` — ACP 4.2 documentation corpus.
+    - `docvec_gte_acp_4_3_20260508.dump` (default) — ACP 4.3 documentation corpus (latest).
+
+    > **NOTE:** The first-start restore loads the dump as-is and keeps its internal collection name. If you select a dump other than the default, you **must** also set **PG collection name** to that dump's filename without `.dump` (e.g. `docvec_gte_acp_4_1_20260508`), otherwise the server queries a collection that does not exist and retrieval returns nothing.
 - **Enable builtin Redis** — when enabled, the chart provisions a single Redis instance used by the rate limiter. When disabled, supply a Redis credentials secret in **redis database secret name**.
 
 ### Scheduling
