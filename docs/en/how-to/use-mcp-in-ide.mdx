@@ -36,9 +36,7 @@ https://<platform-address>/smart-doc/mcp/
 
 ## Authentication
 
-Two options; unauthenticated requests are rejected with HTTP 403.
-
-### Option A: ACP token (recommended)
+Unauthenticated requests are rejected with HTTP 403.
 
 Send your ACP identity token as a bearer header: `Authorization: Bearer <token>`.
 You can obtain the token from a logged-in ACP Web Console session: open the browser developer
@@ -48,29 +46,6 @@ leading `Bearer ` prefix).
 This identifies you as a real user: with an MCP client that supports elicitation, mutating
 actions become available behind interactive approval (see below). The token expires with your
 ACP session, so refresh it when you start getting 403 responses.
-
-### Option B: API key (read-only, service-to-service)
-
-If an API key is configured in the Hyperflux credentials secret (`api-key` key), clients can
-authenticate with the `x-api-key` header. The value is a self-signed HMAC token:
-
-```
-<username>:<unix-timestamp>:<hex-hmac-sha256>
-```
-
-where the signature is HMAC-SHA256 over the string `<username>:<unix-timestamp>` using the
-shared API key:
-
-```bash
-USER=<your-username>; TS=$(date +%s)
-SIG=$(printf '%s:%s' "$USER" "$TS" | openssl dgst -sha256 -hmac "$API_KEY" -hex | sed 's/^.* //')
-echo "$USER:$TS:$SIG"
-```
-
-Tokens are only valid within 300 seconds of their timestamp, so they must be generated per
-session — this scheme suits scripted/automated callers more than an IDE config file.
-API-key sessions are **always read-only**: mutating actions are declined regardless of the
-approval settings.
 
 ## Configure your IDE
 
@@ -110,12 +85,12 @@ your MCP client:
 - With the default strategy `disabled`, the MCP tool is read-only for everyone — write tools
   are removed from the agent entirely.
 - With other strategies, mutating actions (create / update / delete / scale resources) are
-  available **only** when both hold: you authenticated with an ACP token (not an API key), and
-  your MCP client supports *elicitation*. Before executing a write, Hyperflux sends an approval
-  request that your IDE shows as a confirmation prompt; no answer within the configured timeout
-  counts as a decline, and a declined action is not re-asked within the same session.
-- Clients without elicitation support (and all API-key sessions) get read-only behavior: write
-  attempts are declined with a "read-only MCP session" message, while reads keep working.
+  available **only** when your MCP client supports *elicitation*. Before executing a write,
+  Hyperflux sends an approval request that your IDE shows as a confirmation prompt; no answer
+  within the configured timeout counts as a decline, and a declined action is not re-asked
+  within the same session.
+- Clients without elicitation support get read-only behavior: write attempts are declined with
+  a "read-only MCP session" message, while reads keep working.
 
 ## Troubleshooting
 
@@ -133,10 +108,10 @@ A healthy server answers with `"serverInfo":{"name":"hyperflux",...}`.
 
 | Symptom | Cause |
 |---|---|
-| HTTP 403 | Authentication failed: missing/expired ACP token, or an API-key token outside its 300-second window / signed with the wrong key. |
+| HTTP 403 | Authentication failed: missing or expired ACP token. |
 | HTTP 404 | **Expose as MCP Server** is off, or the setting was changed without the pods restarting. |
 | HTTP 307 | Missing trailing slash — use `/smart-doc/mcp/`. |
-| Writes always declined | You authenticated with an API key, your client does not support elicitation, or the approval strategy is `disabled`. |
+| Writes always declined | Your client does not support elicitation, or the approval strategy is `disabled`. |
 | Approval prompt disappears / connection drops during approval | The ingress idle timeout is shorter than the **MCP Write-Approval Timeout** — lower the timeout or raise the ingress limit. |
 
 Server-side logs (`kubectl -n cpaas-system logs -l app=smart-doc -c serve`) show
