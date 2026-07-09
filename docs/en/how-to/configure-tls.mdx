@@ -9,7 +9,8 @@ connections: the LLM service, the reranker, MCP servers and PostgreSQL.
 
 The most common need — trusting an LLM or MCP endpoint that uses an internal or self-signed
 certificate — is solved with **Extra CA ConfigMaps**, available directly in the installation
-form. The remaining knobs are advanced settings applied by patching the plugin configuration.
+form. For test environments, certificate verification for LLM calls can also be skipped
+entirely (see the last section).
 
 ## Trust an internal / self-signed CA (Extra CA ConfigMaps)
 
@@ -33,8 +34,9 @@ Each listed ConfigMap is mounted read-only at `/opt/extra-ca/<configmap-name>/`.
 certificates are merged with the default CA bundle and the merged bundle is applied
 process-wide, so it covers **LLM, reranker and MCP** connections.
 
-> **NOTE:** PostgreSQL is the exception — it does not use this bundle. For TLS to an external
-> PostgreSQL, see the `pgSSLMode` / `pgSSLRootCert` settings below.
+> **NOTE:** PostgreSQL is the exception — it does not use this bundle. TLS to an external
+> PostgreSQL is configured separately via the `pgSSLMode` / `pgSSLRootCert` values of the
+> plugin configuration.
 
 Updating the *content* of an already-registered ConfigMap (e.g. rotating the CA) requires a
 manual restart:
@@ -63,45 +65,35 @@ extra_ca: merged 1/1 CA file(s) into /tmp/smart-doc-ca.pem
 Then ask a question in the chat panel — requests to the endpoint that previously failed with
 `CERTIFICATE_VERIFY_FAILED` should now succeed.
 
-## Advanced TLS settings
+## Skip TLS certificate verification (not recommended)
 
-The following settings have **no installation form field**. They are applied by patching the
-plugin configuration (`ModuleInfo`) directly:
+For test or development environments where importing the CA is not practical, TLS certificate
+verification for **LLM calls** can be switched off entirely with `llmSkipSslVerify`.
+
+> **WARNING:** This exposes the LLM connection to man-in-the-middle attacks, and it overrides
+> both the TLS profile and any extra CA trust — which is why it is deliberately not offered in
+> the installation form. The production-safe path for internal certificates is
+> **Extra CA ConfigMaps** above. The setting affects LLM calls only; reranker, MCP and
+> PostgreSQL connections are not touched.
+
+Apply it by patching the plugin configuration (`ModuleInfo`) directly:
 
 ```bash
 # Find the ModuleInfo of the Hyperflux plugin (cluster-scoped, name like global-<hash>)
 MI=$(kubectl get moduleinfo -o jsonpath='{.items[?(@.spec.module=="alauda-hyperflux")].metadata.name}')
 
-# Example: enforce the Intermediate TLS profile for outbound connections
 kubectl patch moduleinfo "$MI" --type=merge -p \
-  '{"spec":{"config":{"smartdoc":{"tlsProfileType":"IntermediateType"}}}}'
+  '{"spec":{"config":{"smartdoc":{"llmSkipSslVerify":true}}}}'
 ```
 
-The platform reconciles the change and rolls the pods automatically.
-
-| Setting | Default | Description |
-|---|---|---|
-| `tlsProfileType` | `""` | Outbound TLS profile for LLM / MCP / PostgreSQL clients. `""` = library default; `IntermediateType` = TLS 1.2+, Mozilla intermediate ciphers; `ModernType` = TLS 1.3 only; `Custom` = use `tlsMinVersion` / `tlsCiphers` below. |
-| `tlsMinVersion` | `""` | Minimum TLS version (`VersionTLS12` / `VersionTLS13`). Versions below TLS 1.2 are rejected. |
-| `tlsCiphers` | `""` | Comma-separated OpenSSL cipher list, applied for non-TLS-1.3 profiles with `tlsProfileType: Custom`. |
-| `pgSSLMode` | `""` | libpq `sslmode` for the PostgreSQL connection, e.g. `require`, `verify-ca`, `verify-full`. `""` leaves the connection string unchanged. |
-| `pgSSLRootCert` | `""` | libpq `sslrootcert` — path to the CA file for PostgreSQL server verification. Must be a path readable inside the pod. |
-| `securityHeadersEnabled` | `true` | Adds security response headers to the Alauda Hyperflux API. |
-| `securityHSTSEnabled` | `true` | Adds the HSTS header (appropriate behind the TLS-terminating ingress). |
-
-### Skipping certificate verification (not recommended)
-
-`llmSkipSslVerify: true` disables TLS certificate verification for **LLM calls only**
-(reranker, MCP and PostgreSQL are not affected). It overrides both the TLS profile and any
-extra CA trust, and exposes the LLM connection to man-in-the-middle attacks — which is why it
-is deliberately not offered in the installation form. Use it for test/development environments
-only; the production-safe path for internal certificates is **Extra CA ConfigMaps** above.
-
-When enabled, every startup logs a warning:
+The platform reconciles the change and rolls the pods automatically. When enabled, every
+startup logs a warning:
 
 ```
 LLM_SKIP_SSL_VERIFY=true — LLM TLS certificate verification is DISABLED (verify=False)
 ```
+
+To revert, patch the value back to `false`.
 
 For external MCP servers there is an equivalent per-server `tls_verify: false` field — see
 [Configure External MCP Servers](./configure-external-mcp.mdx), with the same caveat.
