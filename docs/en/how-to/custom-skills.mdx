@@ -1,0 +1,126 @@
+---
+weight: 20
+---
+
+# Create Custom Skills
+
+Skills are procedural prompts — step-by-step expert playbooks — that Alauda Hyperflux
+automatically loads when a user's question matches. When a query hits a skill, the skill body is
+injected into the agent's context so the answer follows your organization's procedure instead of
+a generic one.
+
+Alauda Hyperflux ships with built-in troubleshooting skills (pod failure diagnosis, node
+NotReady, ingress 5xx triage, PVC binding failure, routine inspection), active out of the box.
+You can add your own skills via ConfigMaps; a custom skill with the same `name` as a built-in
+one overrides it.
+
+## How matching works
+
+Each skill declares a `name` and a `description`. At startup they are embedded with the same
+embedding model used by the knowledge base; at query time the user's question is compared
+against them by cosine similarity. The single best match at or above the **Skills Match
+Threshold** (default `0.35`) is injected; below the threshold nothing happens.
+
+Write the `description` accordingly: it is the matching surface. State what the skill diagnoses
+and mention the phrases users are likely to use.
+
+## Write a skill file
+
+A skill is a Markdown file with YAML frontmatter:
+
+```markdown
+---
+name: etcd-degraded
+description: Diagnose an etcd cluster reporting degraded or unhealthy members. Use when the user reports etcd alerts, slow API server, or a control-plane node showing etcd errors.
+---
+
+# etcd Degraded Diagnosis
+
+1. List the etcd pods in `kube-system` and check their status and recent events.
+2. Check member health: report which member is unhealthy and the specific error.
+3. Correlate with node disk pressure or clock skew; cite the exact log line.
+4. Recommend the remediation matching the identified cause; do not guess.
+```
+
+Rules:
+
+- `name` (required): must match `^[a-z][a-z0-9_-]*$`. Duplicate names within one scan: the first
+  file wins; a custom skill overrides a built-in skill of the same name.
+- `description` (required): non-empty; drives matching.
+- Body (required): everything after the frontmatter. Keep it under 4 KB — larger bodies still
+  load but log a warning and consume context on every match.
+- Files that fail these rules are skipped with a WARN log; they never break the service.
+
+## Deploy skills via a ConfigMap
+
+Create a ConfigMap **in the namespace where Alauda Hyperflux is installed** (`cpaas-system`).
+Every `*.md` data key is loaded as one skill:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-org-skills-sre
+  namespace: cpaas-system
+data:
+  etcd-degraded.md: |
+    ---
+    name: etcd-degraded
+    description: Diagnose an etcd cluster reporting degraded or unhealthy members. Use when the user reports etcd alerts, slow API server, or a control-plane node showing etcd errors.
+    ---
+
+    # etcd Degraded Diagnosis
+
+    1. List the etcd pods in `kube-system` and check their status and recent events.
+    2. Check member health: report which member is unhealthy and the specific error.
+    3. Correlate with node disk pressure or clock skew; cite the exact log line.
+    4. Recommend the remediation matching the identified cause; do not guess.
+```
+
+Then in **Administrator / Marketplace / Cluster Plugins**, install or update the
+`Alauda Hyperflux` plugin:
+
+- **Enable Skills**: on (default).
+- **Skills Match Threshold**: keep `0.35` unless skills fire too eagerly (raise it) or never
+  match (lower it).
+- **Skills ConfigMaps**: add the ConfigMap name, e.g. `my-org-skills-sre`.
+
+Each listed ConfigMap is mounted read-only at `/opt/skills/<configmap-name>/` and scanned
+**once at startup**. Adding or removing a ConfigMap name in the form restarts the service
+automatically; editing the content of an already-registered ConfigMap requires a manual restart:
+
+```bash
+kubectl -n cpaas-system rollout restart deploy/smart-doc
+```
+
+## Verify
+
+Check the startup logs:
+
+```bash
+kubectl -n cpaas-system logs -l app=smart-doc -c serve | grep '\[skills\]'
+```
+
+Expected on load:
+
+```
+[skills] loaded 6 skill(s) (built-in=5, admin=1 from /opt/skills), threshold=0.35, vec_dim=768
+```
+
+Then ask a question in the chat panel that is semantically close to your skill's description.
+On a hit the log shows the selected skill and its score:
+
+```
+[skills] selected name=etcd-degraded team=my-org-skills-sre score=0.62 query='...'
+```
+
+If a skill never matches, compare the logged scores against the threshold and rewrite the
+`description` to be closer to how users actually phrase the question.
+
+Other notable log lines:
+
+| Log message | Meaning |
+|---|---|
+| `[skills] feature disabled (ENABLE_SKILLS=false)` | The Enable Skills toggle is off. |
+| `[skills] enabled but no skills loaded` | No valid skill files were found — check WARN lines above it for per-file reasons. |
+| `[skills] admin skill(s) override built-in: [...]` | Your custom skills replaced built-in skills of the same name. |

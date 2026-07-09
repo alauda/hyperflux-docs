@@ -1,0 +1,114 @@
+---
+weight: 10
+---
+
+# Configure External MCP Servers
+
+Alauda Hyperflux ships with a built-in MCP server that provides cluster-aware tools.
+You can extend the agent's tool set with your own (external) MCP servers — for example an
+internal wiki search, a CMDB query service, or any other MCP-compatible endpoint.
+
+External MCP servers are declared in ConfigMaps and registered through the installation form.
+At startup, Alauda Hyperflux connects to each server, lists its tools, and makes them available
+to the agent alongside the built-in tools.
+
+## Declare the MCP servers in a ConfigMap
+
+Create a ConfigMap **in the namespace where Alauda Hyperflux is installed** (`cpaas-system`).
+Every data key with a `.yaml`, `.yml` or `.json` extension is parsed; the content of each file
+must be a **list** of server entries:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-org-mcp-servers
+  namespace: cpaas-system
+data:
+  servers.yaml: |
+    - name: corp-wiki
+      url: https://wiki-mcp.example.com/mcp
+      transport: streamable_http
+      headers:
+        Authorization: "Bearer <your-token>"
+    - name: cmdb
+      url: https://cmdb-mcp.example.com/sse
+      transport: sse
+      tls_verify: false
+```
+
+Fields per server entry:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Unique server name matching `^[a-z][a-z0-9_-]*$`. The name `acp_mcp_server` is reserved. |
+| `url` | Yes | The MCP endpoint URL. |
+| `transport` | No | `streamable_http` (default) or `sse`. |
+| `headers` | No | Static HTTP headers sent on every request, e.g. for token auth. `${VAR}` placeholders are substituted from the container environment if the variable exists. |
+| `tls_verify` | No | Whether to verify the server's TLS certificate. Default `true`. For endpoints using an internal CA, prefer keeping this `true` and adding the CA via **Extra CA ConfigMaps** (see [Configure TLS](./configure-tls.mdx)). |
+
+Invalid entries (bad name, missing url, unknown transport, duplicate name) are skipped with an
+ERROR log; they never prevent the other servers or the service itself from starting.
+
+> **NOTE:** ConfigMap values are stored in plain text. Avoid putting long-lived secrets directly
+> in `headers`; rotate any token you place there as you would any shared credential.
+
+## Register the ConfigMap
+
+In **Administrator / Marketplace / Cluster Plugins**, install or update the `Alauda Hyperflux`
+plugin and add the ConfigMap name under **Extra MCP Servers ConfigMaps**.
+
+Each listed ConfigMap is mounted read-only at `/opt/extra-mcp/<configmap-name>/` and scanned
+**once at startup**:
+
+- Adding or removing a ConfigMap name in the form triggers a rolling restart automatically.
+- Editing the *content* of an already-registered ConfigMap does **not** — restart manually:
+
+  ```bash
+  kubectl -n cpaas-system rollout restart deploy/smart-doc
+  ```
+
+## Tool naming and approval
+
+Tools from an external server are exposed to the agent with the server name as a prefix,
+e.g. `corp-wiki__search_pages`, so they can never collide with built-in tool names.
+
+External tools are subject to the same **Tool Approval Strategy** as built-in tools:
+
+- With the default strategy `disabled`, any tool **not** annotated `readOnlyHint: true` by its
+  MCP server is filtered out of the agent's tool set entirely. Many MCP servers do not annotate
+  their tools — in that case none of their tools will be visible until you either switch the
+  strategy to `tool_annotations` (write tools then require interactive approval) or have the
+  MCP server annotate its read-only tools.
+- With `tool_annotations`, read-only tools run freely and all other tools prompt the user for
+  approval before each call.
+
+## Verify
+
+Check the startup logs:
+
+```bash
+kubectl -n cpaas-system logs -l app=smart-doc -c serve | grep -i "extra mcp\|MCP tools"
+```
+
+Expected lines:
+
+```
+Loading extra MCP servers from file /opt/extra-mcp/my-org-mcp-servers/servers.yaml
+Loading extra MCP server name=corp-wiki url=https://wiki-mcp.example.com/mcp transport=streamable_http headers={'Authorization': '<redacted>'}
+Extra MCP corp-wiki loaded 3 tools: ['corp-wiki__search_pages', ...]
+Loaded 15 MCP tools (acp=12, extra=3)
+```
+
+Common failure modes:
+
+| Log message | Cause |
+|---|---|
+| `Extra MCP <name> timed out after 10.0s; skipped` | The endpoint is unreachable or slow; each server has a 10-second connection budget and is skipped without affecting the others. |
+| `Extra MCP <name> failed to load: ...; skipped` | Connection or protocol error — check the URL, transport and TLS trust. |
+| `<file> is not valid YAML` / `must be a list` | The ConfigMap file content is malformed. |
+| `extra MCP header placeholder ${VAR} not in environment; leaving as-is` | A `${VAR}` header referenced an environment variable that does not exist in the container. |
+| `AGENT_APPROVAL_STRATEGY=disabled — filtered out N write/unannotated tools` | Tools without `readOnlyHint: true` were removed under the default approval strategy (see above). |
+
+Sensitive header values (`Authorization`, `X-API-Key`, cookies, and any value longer than
+16 characters) are always redacted in logs.

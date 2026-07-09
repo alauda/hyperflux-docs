@@ -162,11 +162,13 @@ Fill in the configurations below:
   - `never`: no approval, the LLM can call any tool unattended. **Use with caution in production.**
 - **Expose as MCP Server**: expose Alauda Hyperflux itself as an MCP server at `/mcp`, so IDEs and
   agents can call it as a tool. Read operations are always allowed; write actions require
-  interactive approval. Default off.
+  interactive approval. Default off. See
+  [Use Hyperflux as an MCP Server in Your IDE](./how-to/use-mcp-in-ide.mdx).
   - **MCP Write-Approval Timeout (s)**: max seconds to wait for a write-approval response before
     treating it as a decline. Default `300`.
 - **Extra MCP Servers ConfigMaps** (Optional): names of ConfigMaps (in the plugin namespace) holding
   extra MCP server definitions; each ConfigMap's `*.yaml`/`*.yml`/`*.json` entries are scanned at startup.
+  See [Configure External MCP Servers](./how-to/configure-external-mcp.mdx).
 
 ### Skills
 
@@ -174,7 +176,7 @@ Fill in the configurations below:
   - **Skills Match Threshold**: cosine threshold (0-1) for matching a query to a skill.
     Higher is stricter. Default `0.35`.
   - **Skills ConfigMaps** (Optional): names of ConfigMaps (in the plugin namespace) whose `*.md`
-    entries are loaded as skills.
+    entries are loaded as skills. See [Create Custom Skills](./how-to/custom-skills.mdx).
 
 ### Rate and quota limits
 
@@ -203,6 +205,7 @@ The defaults work for most cases; adjust only if needed.
 - **Extra CA ConfigMaps** (Optional): names of ConfigMaps (in the plugin namespace) holding
   internal / self-signed CA certificates (PEM). The certificates are appended to the outbound TLS
   trust bundle, so LLM / MCP / reranker endpoints using such certificates can be accessed.
+  See [Configure TLS](./how-to/configure-tls.mdx).
 
 Click **Install** to start installation.
 
