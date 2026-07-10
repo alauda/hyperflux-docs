@@ -1,0 +1,144 @@
+---
+weight: 50
+---
+
+# Configure Data Redaction
+
+Alauda Hyperflux can redact sensitive values — internal IPs, tokens, passwords — before they
+leave the service or get persisted. Redaction is opt-in and has three parts:
+
+- **Value rules** (`queryRedactionFilters`): regex rules applied to the user's question and
+  attachments, and to agent tool results, *before* the text is sent to the LLM and *before* it
+  is written to the conversation history.
+- **Key-name redaction** (`toolArgRedactKeys`): tool-call arguments whose key name looks like a
+  credential (`password`, `token`, `api_key`, ...) are masked on approval cards and in the
+  approval audit records.
+- **Redaction audit**: every rule hit is recorded (rule name and hit count — never the value
+  itself) and is queryable by platform administrators.
+
+> **NOTE:** Redaction is an input-side filter with the precision of your regex rules. A value
+> that no rule matches still flows to the LLM and may appear in answers. Do not treat it as a
+> guaranteed output filter.
+
+Both settings are **not** in the installation form. They are applied by patching the plugin
+configuration (`ModuleInfo`), and take effect after the pods restart (the platform rolls them
+automatically after a patch).
+
+## Value rules (`queryRedactionFilters`)
+
+Each rule is an object:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Rule label; shows up in logs and the audit records. |
+| `pattern` | Yes | Regular expression (Python `re` syntax). |
+| `mode` | No | `redact` (default) — replace the match with `replace_with`; or `tokenize` — replace the match with an opaque per-request token that is substituted back only when the value is passed to an actual tool execution, so the LLM never sees it but tools still receive the real value. |
+| `replace_with` | For `redact` | Literal replacement text, e.g. `[REDACTED_IP]`. |
+| `applies_to` | No | Surfaces the rule runs on: `query` (the user's question and attachments — the default) and/or `tool_result` (agent tool outputs before they are fed back to the LLM). |
+
+Example rule set:
+
+```json
+[
+  {
+    "name": "internal_ip",
+    "pattern": "\\b(?:10|127)\\.(?:\\d{1,3}\\.){2}\\d{1,3}\\b",
+    "replace_with": "[REDACTED_IP]",
+    "applies_to": ["query"]
+  },
+  {
+    "name": "jwt",
+    "pattern": "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+",
+    "replace_with": "[REDACTED_JWT]",
+    "applies_to": ["query", "tool_result"]
+  }
+]
+```
+
+Apply it (the value is the JSON array as a **string**):
+
+```bash
+MI=$(kubectl get moduleinfo -o jsonpath='{.items[?(@.spec.module=="alauda-hyperflux")].metadata.name}')
+kubectl patch moduleinfo "$MI" --type=merge -p '{
+  "spec": {"config": {"smartdoc": {
+    "queryRedactionFilters": "[{\"name\":\"internal_ip\",\"pattern\":\"\\\\b(?:10|127)\\\\.(?:\\\\d{1,3}\\\\.){2}\\\\d{1,3}\\\\b\",\"replace_with\":\"[REDACTED_IP]\",\"applies_to\":[\"query\"]}]"
+  }}}
+}'
+```
+
+Validation is strict: a malformed JSON string fails the deployment render, and an invalid
+individual rule (missing `name`/`pattern`, unknown `mode` or `applies_to`, uncompilable regex)
+prevents the service from starting. Redaction itself is fail-closed — if applying the rules to
+a request errors out, the turn is aborted rather than letting the raw text through.
+
+Writing rules well:
+
+- Rules run **sequentially in list order** on every request; an earlier rule's replacement text
+  is visible to later rules. Put broad rules last.
+- Keep patterns narrow and anchored. Regex syntax is validated at startup, but catastrophic
+  backtracking is not — avoid nested quantifiers.
+- Over-broad rules silently degrade answer quality (the LLM sees `[REDACTED_...]` instead of
+  the real value), which is why the feature ships empty by default.
+
+## Key-name redaction (`toolArgRedactKeys`)
+
+Independent of the value rules, tool-call arguments shown on approval cards and stored in the
+approval audit are masked when the argument's key name contains one of the configured
+substrings (case-insensitive). The tool itself still receives the real value.
+
+When unset, a built-in safe set applies:
+
+```
+password, passwd, secret, token, api_key, apikey, api-key,
+authorization, credential, private_key, access_key, secret_key
+```
+
+Setting `toolArgRedactKeys` (comma-separated substrings) **replaces** this set — include the
+defaults you want to keep. Setting it to an empty string does not disable the feature; the
+default set applies again.
+
+## Redaction audit
+
+As soon as either setting above is configured, every rule hit is recorded in the
+`redaction_audit` table of the conversation-history database: request id, session, username,
+surface (`query` / `attachment` / `tool_result` / `tool_args`), rule name, mode, and hit count.
+**The matched value is never stored.**
+
+Platform administrators (see **Admin Users** in the installation form) can query the records:
+
+```
+GET https://<platform-address>/smart-doc/api/admin/redaction_audit
+```
+
+Supported query parameters (all optional, ANDed): `username`, `session_id`, `request_id`,
+`surface`, `rule_name`, `from`, `to`, plus `limit` (default 100, max 1000) and `offset`.
+Non-admin callers receive 403.
+
+Two operational notes:
+
+- Audit writes are best-effort: a failed write is logged and dropped, never failing the user's
+  request. Do not treat the table as a guaranteed-complete compliance ledger.
+- There is no automatic retention/cleanup for `redaction_audit` — prune it externally if your
+  deployment handles large volumes.
+
+## Verify
+
+Send a question containing a value your rule matches, then check the logs:
+
+```bash
+kubectl -n cpaas-system logs -l app=smart-doc -c serve | grep 'redaction hits'
+```
+
+Expected (rule names and counts only, never values):
+
+```
+query redaction hits: {'internal_ip': 2}
+tool-result redaction hits: {'jwt': 1}
+```
+
+And query the audit as an admin:
+
+```bash
+curl -sk "https://<platform-address>/smart-doc/api/admin/redaction_audit?rule_name=internal_ip" \
+  -H "Authorization: Bearer <admin-acp-token>"
+```

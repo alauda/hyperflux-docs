@@ -4,6 +4,108 @@ weight: 40
 
 # Release Notes
 
+## v1.5.0
+
+### Features and Enhancements
+
+#### **Agent Mode by Default**
+
+Agent mode is now enabled by default and no longer requires a deploy-time toggle. Smart Doc answers with an explicit reasoning loop that can call MCP tools to retrieve real-time cluster information, and routes each request to the right behavior (question answering, troubleshooting, or operations) for more reliable multi-step tasks.
+
+#### **Tool-Call Approval**
+
+Any agent action that creates, modifies, or deletes cluster resources now requires explicit user confirmation before it runs. Read-only tools continue to execute without interruption, giving you real-time insight while keeping write operations under human control.
+
+#### **External MCP Servers**
+
+Administrators can register additional MCP servers through a ConfigMap so that custom tools become available to the agent. Tool names are prefixed per server to avoid collisions, and an approval strategy governs which tools are exposed.
+
+#### **Custom Skills**
+
+Skills let you shape the agent's behavior for specific tasks using a simple frontmatter format, matched to each request by name and description. A set of built-in skills ships and loads by default, and custom skills can override them.
+
+#### **Hyperflux as an MCP Server**
+
+Hyperflux can now be consumed as an MCP server from your IDE or other agents. It exposes read access with ACP bearer-token authentication, and write operations are gated by an elicitation-based approval flow.
+
+#### **Data Redaction**
+
+A configurable redaction subsystem masks sensitive data across user queries, tool arguments, and tool results, with support for both redact and tokenize modes. An admin-only audit API records redaction hits as metadata only, so the original values are never stored.
+
+#### **Transport Security**
+
+Smart Doc now supports custom CA certificates for outbound connections to the LLM, MCP, and reranker services, along with configurable TLS profiles and security headers. Air-gapped and data-residency deployments are supported, including a fail-safe reranker path.
+
+### Improvements
+
+- Enabled BM25 hybrid search by default to improve retrieval quality.
+- Reused MCP sessions across reasoning rounds to remove per-round re-handshakes and reduce latency in agent mode.
+- Ran mode classification and glossary lookup in parallel and shared a cached base prompt across modes to reduce response latency.
+- Added a stop-generation control that truly cancels the in-progress request on the backend and records the interrupted answer in history.
+- Added SSE heartbeats so long-running tool calls no longer cause the frontend to disconnect.
+- Reduced the container image size by shipping a CPU-only build.
+- Hardened authentication and secret handling, including JWT expiry verification and redaction of secrets in logs.
+- Improved production diagnosability with per-request trace IDs and reduced log noise.
+
+### Bug Fixes
+
+- Fixed an access-control issue where a user could reach another user's sessions.
+- Fixed session and history API error paths so failures return the correct status codes.
+- Fixed agent conversation history being lost when a request was cancelled mid-stream.
+- Fixed leftover UI markup being replayed into the model when resuming a conversation from history.
+- Fixed knowledge base initialization on fresh installs and on Kunpeng 920 (ARM) hardware.
+- Resolved all outstanding high and critical dependency and image security vulnerabilities.
+
+
+## v1.4.0
+
+### Features and Enhancements
+
+#### **Improved retrieval quality**
+
+The bundled knowledge base has been re-embedded with a stronger model, substantially improving answer relevance — including cross-language retrieval (for example, asking a question in Chinese against English documentation). Existing v1.3.x deployments are migrated automatically during the upgrade — see the [Upgrade guide](../upgrade/index.mdx).
+
+#### **Hybrid keyword and semantic retrieval**
+
+Answers are now retrieved using a combination of semantic similarity and keyword matching, then fused into a single ranking. This recovers exact-keyword matches that pure semantic search misses — such as CRD names, command flags, and error strings — without giving up the ability to answer natural-language questions.
+
+#### **Document-level retrieval**
+
+Each document is now indexed at the document level in addition to its individual sections. Questions about a document's overall topic now find the right document even when the user's wording doesn't overlap with any specific paragraph.
+
+#### **Built-in knowledge base preset selection**
+
+The installation page now offers a choice between two presets for the bundled knowledge base. The default works well for most queries; the larger preset can give slightly better recall on questions that span long-form documents.
+
+#### **Bundled knowledge base refresh during upgrade**
+
+Upgrading from v1.3.x to v1.4.x replaces the bundled product knowledge base with the new GTE-embedded dump and migrates per-document metadata automatically. No manual database export, import, or restart step is required — see the [Upgrade guide](../upgrade/index.mdx). Custom and BYO knowledge bases are not touched by this step (see Breaking Changes and Known Limitations below).
+
+#### **Conversation history compression**
+
+Long conversations are automatically summarised so they fit within the LLM's context window without losing earlier turns. This reduces token cost on extended agent-mode sessions and lets users continue an investigation across many messages without quality degradation.
+
+#### **Agent Mode and MCP tool loading can now be configured independently**
+
+Agent Mode (multi-step reasoning) and ACP MCP tool loading are now controlled by separate install switches. You can turn on Agent Mode without loading the ACP MCP tools — for example, when the LLM should plan over the bundled knowledge base alone — and turn the tools back on when live cluster operations are required.
+
+#### **Build a Custom Knowledge Base**
+
+A new guide walks administrators through ingesting internal Git repositories into the Hyperflux knowledge base, so Hyperflux can answer questions grounded in private runbooks, design documents, or other internal references. See [Build a Custom Knowledge Base](../build-custom-kb.mdx).
+
+### Improvements
+
+- Reduced token cost on agent-mode answers when tools return long output (such as logs or large resource definitions).
+- Improved storage performance on the bundled knowledge-base database.
+
+### Breaking Changes
+
+- **Custom knowledge bases built under v1.3.x must be rebuilt before upgrading.** The new embedding model is incompatible with the previous one, so existing custom corpus data will not be usable until rebuilt. See the [Build a Custom Knowledge Base](../build-custom-kb.mdx) guide for the new procedure.
+
+### Known Limitations
+
+- Documents you uploaded via the BYO Knowledge tool are preserved unchanged across the v1.4.0 upgrade — only the bundled product knowledge base is refreshed.
+
 ## v1.3.1
 
 ### Features and Enhancements

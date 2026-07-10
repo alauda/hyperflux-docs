@@ -1,0 +1,120 @@
+---
+weight: 40
+---
+
+# Use Hyperflux as an MCP Server in Your IDE
+
+Alauda Hyperflux can expose itself as an MCP (Model Context Protocol) server, so AI coding
+assistants — Claude Code, Cursor, VS Code Copilot, or any MCP-compatible agent — can ask it
+Alauda product questions and inspect (or, with approval, operate) ACP clusters, directly from
+the IDE.
+
+The MCP server exposes a single tool, `hyperflux_agent`, which delegates to the full Hyperflux
+agent: knowledge-base retrieval plus cluster tools (clusters, projects, namespaces, nodes, pods,
+resources, events, pod logs, metrics, alerts). It returns a grounded answer with citations.
+
+## Enable the MCP server
+
+In **Administrator / Marketplace / Cluster Plugins**, install or update the `Alauda Hyperflux`
+plugin:
+
+- **Expose as MCP Server**: on (default off).
+- **MCP Write-Approval Timeout (s)**: how long a mutating action waits for your approval in the
+  IDE before being treated as declined. Default `300`. Keep it below your ingress idle timeout,
+  otherwise the connection may be severed while waiting for approval.
+
+## The endpoint
+
+The MCP endpoint uses the streamable HTTP transport, at:
+
+```
+https://<platform-address>/smart-doc/mcp/
+```
+
+> **NOTE:** The trailing slash matters. Requests to `/smart-doc/mcp` (without the slash) are
+> answered with an HTTP 307 redirect that some MCP clients do not follow.
+
+## Authentication
+
+Unauthenticated requests are rejected with HTTP 403.
+
+Send your ACP identity token as a bearer header: `Authorization: Bearer <token>`.
+You can obtain the token from a logged-in ACP Web Console session: open the browser developer
+tools and copy the value of the `cpaas_id_token` cookie (strip the surrounding quotes and the
+leading `Bearer ` prefix).
+
+This identifies you as a real user: with an MCP client that supports elicitation, mutating
+actions become available behind interactive approval (see below). The token expires with your
+ACP session, so refresh it when you start getting 403 responses.
+
+## Configure your IDE
+
+Claude Code:
+
+```bash
+claude mcp add --transport http hyperflux \
+  "https://<platform-address>/smart-doc/mcp/" \
+  --header "Authorization: Bearer <your-acp-token>"
+```
+
+Generic `mcp.json` (Cursor, VS Code, and most other MCP clients):
+
+```json
+{
+  "mcpServers": {
+    "hyperflux": {
+      "type": "http",
+      "url": "https://<platform-address>/smart-doc/mcp/",
+      "headers": {
+        "Authorization": "Bearer <your-acp-token>"
+      }
+    }
+  }
+}
+```
+
+Then ask your assistant something like *"Using the hyperflux tool, check why pods in namespace
+foo are not ready"*. The tool accepts a `question` plus optional `session_id` (to continue a
+previous conversation), `cluster`, `namespace` and `project` hints.
+
+## Read-only vs. write actions
+
+What the agent may do through the IDE depends on the plugin's **Tool Approval Strategy** and
+your MCP client:
+
+- With the default strategy `disabled`, the MCP tool is read-only for everyone — write tools
+  are removed from the agent entirely.
+- With other strategies, mutating actions (create / update / delete / scale resources) are
+  available **only** when your MCP client supports *elicitation*. Before executing a write,
+  Hyperflux sends an approval request that your IDE shows as a confirmation prompt; no answer
+  within the configured timeout counts as a decline, and a declined action is not re-asked
+  within the same session.
+- Clients without elicitation support get read-only behavior: write attempts are declined with
+  a "read-only MCP session" message, while reads keep working.
+
+## Troubleshooting
+
+Verify the endpoint end-to-end with curl:
+
+```bash
+curl -sk -X POST "https://<platform-address>/smart-doc/mcp/" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "Authorization: Bearer <your-acp-token>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
+```
+
+A healthy server answers with `"serverInfo":{"name":"hyperflux",...}`.
+
+| Symptom | Cause |
+|---|---|
+| HTTP 403 | Authentication failed: missing or expired ACP token. |
+| HTTP 404 | **Expose as MCP Server** is off, or the setting was changed without the pods restarting. |
+| HTTP 307 | Missing trailing slash — use `/smart-doc/mcp/`. |
+| Writes always declined | Your client does not support elicitation, or the approval strategy is `disabled`. |
+| Approval prompt disappears / connection drops during approval | The ingress idle timeout is shorter than the **MCP Write-Approval Timeout** — lower the timeout or raise the ingress limit. |
+
+Server-side logs (`kubectl -n cpaas-system logs -l app=smart-doc -c serve`) show
+`Outbound MCP server mounted at /mcp` at startup when the feature is enabled, and
+`MCP read-only session — blocked write tool <name>` when a write was declined due to a
+read-only session.

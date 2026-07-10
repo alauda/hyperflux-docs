@@ -1,0 +1,305 @@
+---
+weight: 18
+---
+
+# Build a Custom Knowledge Base
+
+The Alauda Hyperflux plugin ships with a built-in **system knowledge base** covering Alauda Container Platform
+(ACP) and Alauda product documentation. Alongside it, Hyperflux maintains a separate **user knowledge base**
+that you can fill with your own content — internal runbooks, SRE playbooks, design documents, versions of
+Alauda product docs that don't ship in the bundled corpus, or any other private Git repositories. Hyperflux
+retrieves from **both** knowledge bases on every question and merges the results, so adding a custom corpus
+**augments** the bundled product knowledge rather than replacing it.
+
+This guide covers the admin-driven path: bulk-ingest a list of Git repositories into the user knowledge base
+using the in-pod builder. (For end-user file uploads through the chat UI, use the BYO Knowledge tool added
+in v1.3.1 — same destination, different entry point.)
+
+The workflow runs **inside the deployed `smart-doc` pod**. The image already contains the builder source,
+the embedding model, and the right Python environment, and the pod already has connectivity to the user
+knowledge-base PostgreSQL. You only need a manifest of repositories to ingest and `kubectl exec` access to
+the global cluster.
+
+## How the embedding pipeline works
+
+The smart-doc builder turns a list of Git repositories into a vectorised knowledge base in two stages:
+
+1. **Prepare** — clone the repos, split each `.md` / `.mdx` document by heading and chunk size, then call an LLM
+   (the same one already configured for the running Hyperflux plugin) to generate a one-paragraph summary and
+   a few representative questions per document. Output: `documents.json`.
+2. **Embed** — load the `gte-multilingual-base` embedding model, embed both the chunks and the per-document
+   summaries, and write them to the user-knowledge-base PostgreSQL (`docvec_user_kb`) under the collection
+   name the running server reads (`user_defined_kb` by default).
+
+Once embedded, the running server picks up the new content **on the next query** — no chart edit, no pod
+restart. The system knowledge base is untouched.
+
+> **NOTE:** The BM25 index used by hybrid retrieval is **not** built by the embed step. The bundled system-KB
+> dumps include a pre-built BM25 index, but the user-KB database is created empty during install. If your
+> deployment has hybrid retrieval enabled (the default), you must create the BM25 index on the user-KB
+> collection once — see Step 5.
+
+## Prerequisites
+
+- `kubectl` access to the cluster running Hyperflux (the global cluster) with `exec` permission on the
+  `smart-doc` pod in the `cpaas-system` namespace.
+- **Read access** to every Git repository you want to ingest. If they are private, have an HTTPS user/token
+  pair ready.
+- **An LLM endpoint with sufficient quota.** The prepare phase calls the LLM once per source document
+  (roughly 1,000–3,000 calls per ACP-sized knowledge base). By default the in-pod commands reuse the LLM
+  endpoint already configured for Hyperflux (the one set during install via **LLM Base URL** / **LLM API Key**
+  / **LLM Model Name**). If your account is rate-limited, prepare a separate higher-quota endpoint and
+  override the env vars in the exec session (Step 3).
+
+You do **not** need a separate workstation Python environment, a downloaded copy of `gte-multilingual-base`,
+a separate PostgreSQL instance, or a clone of the smart-doc repository — the smart-doc container has all of
+this baked in.
+
+## Step 1 — Describe your corpus
+
+Create a JSON manifest listing every Git repository you want to ingest. Save it on your local machine as
+`my-kb.json` (any name works — you'll copy it into the pod in Step 2).
+
+```json
+{
+  "kb_version": "1.0",
+  "repos": [
+    {
+      "git_repo": "https://github.com/myorg/internal-docs",
+      "branch": "main",
+      "doc_version": "1.0",
+      "title": "Internal Docs",
+      "doc_url_template": "/internal-docs/{{ABSOLUTE_URL.split('/docs/en/')[-1].replace('.mdx','.html').replace('.md','.html')}}",
+      "origin": "internal",
+      "sub_dirs": ["docs/en"],
+      "doc_type": "md,mdx"
+    }
+  ]
+}
+```
+
+Add more `repos` entries to ingest multiple repositories in a single run.
+
+Field reference:
+
+| Field | Description |
+|---|---|
+| `git_repo` | Git URL. HTTPS auth uses `GIT_USER` / `GIT_TOKEN` (or `GITHUB_USER` / `GITHUB_TOKEN` for github.com). |
+| `branch` / `tag` | Branch (default `main`) or tag (tag wins if both set). |
+| `doc_version` | Version label stored on each chunk; surfaced in retrieval filters. |
+| `title` | Human-readable corpus name; appears in answer citations. |
+| `doc_url_template` | Jinja template producing the relative URL for each doc; concatenated with `ONLINE_DOC_BASE_URL` at retrieval time. The `ABSOLUTE_URL` variable is the doc's local absolute path. |
+| `origin` | Free-form bucket label (e.g., `internal`, `ACP`). |
+| `sub_dirs` | Optional — only ingest these subdirectories of the repo. |
+| `doc_type` | `md`, `mdx`, or `md,mdx`. |
+| `kb_version` | Stamped on every chunk under `metadata.version`; used to sanity-check that all chunks in a dump came from the same prepare run. |
+
+## Step 2 — Copy the manifest into the smart-doc pod
+
+```bash
+# Find the smart-doc pod (single-replica by default).
+POD=$(kubectl -n cpaas-system get pod -l app=smart-doc \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# Copy your manifest into the pod's /tmp (the only reliably writable path
+# under runAsUser=697; /workspace-smart-doc is read-only).
+kubectl -n cpaas-system cp my-kb.json "${POD}:/tmp/my-kb.json" -c serve
+```
+
+## Step 3 — Run `prepare` inside the pod
+
+Open an interactive shell in the `serve` container and run the prepare phase:
+
+```bash
+kubectl -n cpaas-system exec -it "${POD}" -c serve -- bash
+
+# --- inside the pod ---
+cd /tmp                           # writable; outputs land here
+
+# Required for doc_summary vectors. Read by split_doc.py at PREPARE time —
+# setting it later (at embed time) has no effect.
+export ENABLE_GEN_QUESTIONS=true
+
+# Only if your repos are private:
+export GIT_USER=<your-git-user>
+export GIT_TOKEN=<your-git-token>
+# For github.com use these instead:
+# export GITHUB_USER=<your-github-user>
+# export GITHUB_TOKEN=<your-github-token>
+
+# Optionally override the LLM endpoint for this session if the chart-default
+# one is rate-limited. The builder uses langchain's AzureChatOpenAI, so the
+# Azure-style env vars below are honoured; AZURE_OPENAI_API_VERSION defaults
+# to "2024-12-01-preview" if you omit it.
+# export LLM_BASE_URL=...
+# export LLM_API_KEY=...
+# export LLM_MODEL_NAME=...
+# export AZURE_OPENAI_DEPLOYMENT_NAME=...
+# export AZURE_OPENAI_API_VERSION=...      # optional
+
+python /opt/packages/emb_builder/smart_doc_builder.py prepare \
+  --config /tmp/my-kb.json
+# → writes /tmp/documents.json
+```
+
+Useful flags:
+
+- `--dryrun` — clone the repos and print the document list, but don't call the LLM. Use this first to confirm
+  your `sub_dirs` and `doc_type` filters match what you expect.
+
+> **NOTE:** `prepare` does **not** cache LLM responses across runs — every invocation re-issues one LLM call
+> per source document. Plan for the full per-document cost on each re-roll, and only re-run prepare when the
+> source corpus actually changed (otherwise re-run only `embed` against the existing `documents.json`).
+
+## Step 4 — Run `embed` inside the pod
+
+Stay in the same shell (so the env vars from Step 3 are still in effect):
+
+```bash
+python /opt/packages/emb_builder/smart_doc_builder.py embed \
+  --from-json /tmp/documents.json \
+  --pg-conn-str "${PG_USER_KB_CONN_STR}" \
+  --collection-name user_defined_kb \
+  --vector-types chunk,doc_summary \
+  --min-chunk-size 600 --max-chunk-size 2000 --chunk-overlap 200
+```
+
+The chart already exports `EMB_MODEL_NAME=/opt/gte-multilingual-base`, `DEVICE=cpu`, and
+`PG_USER_KB_CONN_STR` (pointing at the user-KB database `docvec_user_kb`), so you don't need to pass
+`--emb-model` or `--device`. Pass `--pg-conn-str "${PG_USER_KB_CONN_STR}"` explicitly because the script's
+default is the system-KB connection string (`PG_SYS_KB_CONN_STR`).
+
+What the flags do:
+
+| Flag | Recommendation |
+|---|---|
+| `--pg-conn-str "${PG_USER_KB_CONN_STR}"` | Targets the user knowledge-base database. **Do not** point at `PG_SYS_KB_CONN_STR` unless you are deliberately trying to replace the bundled product knowledge base (see "Replacing the system knowledge base" below). |
+| `--collection-name user_defined_kb` | The collection name the running server reads from `docvec_user_kb`. Use this exact value — the chart does not currently expose a way to change the user-KB collection name the server reads. |
+| `--vector-types chunk,doc_summary` | Multi-vector: each doc contributes both chunk vectors and a doc-level summary vector. Matches the production retrieval shape — leave it on. |
+| `--min-chunk-size` / `--max-chunk-size` / `--chunk-overlap` | Defaults are `600 / 0 / 200` (the embed `--help` output); `--max-chunk-size 0` means header-only split with no upper bound. Set an upper bound like `2000`–`3000` if you want every long-form document re-split into smaller chunks. Larger chunks slightly help recall on long-form docs but use more tokens per answer. |
+
+> **WARNING:** When `--vector-types` includes `doc_summary` but `documents.json` was produced by a `prepare`
+> run that didn't have `ENABLE_GEN_QUESTIONS=true` set, embed silently emits **zero** summary vectors and
+> only logs `no_summary=N` at the end. If you see a high `no_summary` count, re-run `prepare` with
+> `ENABLE_GEN_QUESTIONS=true` before re-running embed.
+
+> **NOTE:** The serve container runs on CPU by default (`DEVICE=cpu`). Embedding 5,000 chunks on CPU takes
+> roughly an hour; for a small internal corpus (a few hundred docs) it's a few minutes. If you need GPU
+> throughput, run the build on a GPU-scheduled pod (out of scope for this guide) and use the multi-cluster
+> dump-and-restore path described later.
+
+The embed step does not call the LLM; it can be re-run cheaply against the same `documents.json` to try a
+different chunk size or to extend an existing collection with new documents.
+
+## Step 5 — Create the BM25 index on the user knowledge base (one-time)
+
+The user-KB database is created empty during install — unlike the bundled system-KB dumps, it does not ship
+with a BM25 index pre-built. If hybrid retrieval is enabled (the default), create the index once after your
+first embed run:
+
+```bash
+psql "${PG_USER_KB_CONN_STR}" -c "
+  CREATE INDEX IF NOT EXISTS langchain_pg_embedding_bm25_idx
+    ON langchain_pg_embedding
+    USING bm25 (id, document)
+    WITH (key_field='id');
+"
+```
+
+Without this index, the hybrid-retrieval path silently falls back to dense-only on the user KB (which still
+returns results, just without exact-keyword recall).
+
+That's it — there is **no chart edit and no pod restart** required. The running server already reads from
+`docvec_user_kb` / `user_defined_kb` on every query, so your custom corpus starts contributing to answers
+immediately. Run a representative question through the chat UI to confirm.
+
+## (Optional) Multi-cluster: dump and restore
+
+If you want to build the corpus once and push it to several clusters, take a `pg_dump` of the user KB after
+Step 4 and restore it on each target cluster:
+
+```bash
+# --- on the source cluster, inside the smart-doc pod ---
+pg_dump "${PG_USER_KB_CONN_STR}" -Fc -f /tmp/user_kb.dump
+
+# --- on the workstation ---
+kubectl -n cpaas-system cp \
+  "${POD}:/tmp/user_kb.dump" \
+  ./user_kb.dump
+
+# --- for each target cluster ---
+TARGET_POD=$(kubectl -n cpaas-system get pod -l app=smart-doc \
+  -o jsonpath='{.items[0].metadata.name}' --context <target-context>)
+
+kubectl -n cpaas-system --context <target-context> cp \
+  ./user_kb.dump \
+  "${TARGET_POD}:/tmp/user_kb.dump" -c serve
+
+kubectl -n cpaas-system --context <target-context> exec -it \
+  "${TARGET_POD}" -c serve -- bash -c \
+  "pg_restore -d \"\${PG_USER_KB_CONN_STR}\" /tmp/user_kb.dump"
+```
+
+Then perform Step 5 (BM25 index) on each target cluster — the index is per-database and doesn't survive a
+restore-into-empty-DB on its own (a restore into a populated DB merges BM25 if present in the dump; for a
+fresh user KB, run the `CREATE INDEX` after the restore).
+
+> **NOTE:** `pg_restore` of the user-KB dump into a target cluster that already has user-KB content (e.g.,
+> previous BYO uploads) will conflict on the langchain table CREATEs. For a clean overlay, use the chart's
+> swap mechanism instead, or first drop and recreate `docvec_user_kb` on the target. Plain `pg_restore` is
+> safest only when the target user KB is empty.
+
+## Replacing the bundled system knowledge base (advanced)
+
+The workflow above adds to the user KB and leaves the bundled product knowledge intact. If you have a
+different requirement — for example, the bundled Alauda product docs are wrong for your environment and you
+want to **replace** them with an in-house variant — repeat the same in-pod workflow but target the system KB:
+
+- `--pg-conn-str "${PG_SYS_KB_CONN_STR}"`
+- `--collection-name <your-system-kb-collection-name>`
+- Update `pgconnect.pgCollectionName` in the chart to point at your collection name and re-roll.
+
+This path requires a chart edit and disables automatic system-KB upgrades on future Hyperflux releases (the
+auto-swap rule scan won't match your custom collection name). Use it only if user-KB augmentation isn't
+enough.
+
+## Re-roll cadence
+
+Custom knowledge bases drift faster than product documentation. Plan to re-run **prepare → embed** on a
+schedule that matches your source repos:
+
+- Daily-changing runbooks → nightly cron (a Kubernetes `CronJob` that runs the same in-pod commands as a
+  one-shot job) re-embedding into the same `user_defined_kb` collection.
+- Quarterly architecture docs → manual re-roll on each release boundary.
+
+Re-running embed against the **same** collection name uses deterministic row IDs (`make_row_id` at
+`smart_doc_builder.py:38-48`), so unchanged chunks upsert idempotently and changed chunks overwrite — but
+rows for documents that were *removed* from the manifest become orphans. For a clean replacement, drop and
+recreate the collection before re-embedding:
+
+```bash
+psql "${PG_USER_KB_CONN_STR}" -c "
+  DELETE FROM langchain_pg_embedding
+  WHERE collection_id = (SELECT uuid FROM langchain_pg_collection WHERE name='user_defined_kb');
+  DELETE FROM langchain_pg_collection WHERE name='user_defined_kb';
+"
+```
+
+Then re-run Step 4 to repopulate. The BM25 index on `langchain_pg_embedding` continues to apply to the new
+rows automatically, so you do **not** need to re-run Step 5 — unless you also dropped the database itself
+(e.g., for the multi-cluster `pg_restore` overlay above).
+
+## Caveats
+
+- **The custom corpus shares the user KB with BYO Knowledge tool uploads.** Files end users upload through
+  the chat UI (introduced in v1.3.1) land in the same `user_defined_kb` collection as your admin-curated
+  corpus. They coexist as long as URLs don't collide; in practice this is fine because BYO uploads use a
+  distinct URL scheme. If you ever drop and recreate the collection (Re-roll cadence section), BYO uploads
+  in that collection are wiped along with your corpus — back them up first if you care about them.
+- **System KB version filters do not apply to the user KB.** When a user asks a version-specific question
+  (e.g., about ACP 4.3), the system KB is filtered to that version but the user KB returns matches across
+  all versions. If your custom corpus is multi-version, expect cross-version chunks to surface in answers.
+- **Embedding-model mismatch** is the most common silent failure: vectors built with anything other than the
+  in-pod `/opt/gte-multilingual-base` will be retrievable but always score near zero, so answers collapse to
+  "I don't have enough information" without an obvious error. The in-pod workflow described here uses the
+  baked-in model by default — only override `EMB_MODEL_NAME` if you know what you're doing.
