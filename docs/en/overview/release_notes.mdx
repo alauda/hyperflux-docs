@@ -57,6 +57,55 @@ Smart Doc now supports custom CA certificates for outbound connections to the LL
 - Resolved all outstanding high and critical dependency and image security vulnerabilities.
 
 
+## v1.4.0
+
+### Features and Enhancements
+
+#### **Improved retrieval quality**
+
+The bundled knowledge base has been re-embedded with a stronger model, substantially improving answer relevance — including cross-language retrieval (for example, asking a question in Chinese against English documentation). Existing v1.3.x deployments are migrated automatically during the upgrade — see the [Upgrade guide](../upgrade/index.mdx).
+
+#### **Hybrid keyword and semantic retrieval**
+
+Answers are now retrieved using a combination of semantic similarity and keyword matching, then fused into a single ranking. This recovers exact-keyword matches that pure semantic search misses — such as CRD names, command flags, and error strings — without giving up the ability to answer natural-language questions.
+
+#### **Document-level retrieval**
+
+Each document is now indexed at the document level in addition to its individual sections. Questions about a document's overall topic now find the right document even when the user's wording doesn't overlap with any specific paragraph.
+
+#### **Built-in knowledge base preset selection**
+
+The installation page now offers a choice between two presets for the bundled knowledge base. The default works well for most queries; the larger preset can give slightly better recall on questions that span long-form documents.
+
+#### **Bundled knowledge base refresh during upgrade**
+
+Upgrading from v1.3.x to v1.4.x replaces the bundled product knowledge base with the new GTE-embedded dump and migrates per-document metadata automatically. No manual database export, import, or restart step is required — see the [Upgrade guide](../upgrade/index.mdx). Custom and BYO knowledge bases are not touched by this step (see Breaking Changes and Known Limitations below).
+
+#### **Conversation history compression**
+
+Long conversations are automatically summarised so they fit within the LLM's context window without losing earlier turns. This reduces token cost on extended agent-mode sessions and lets users continue an investigation across many messages without quality degradation.
+
+#### **Agent Mode and MCP tool loading can now be configured independently**
+
+Agent Mode (multi-step reasoning) and ACP MCP tool loading are now controlled by separate install switches. You can turn on Agent Mode without loading the ACP MCP tools — for example, when the LLM should plan over the bundled knowledge base alone — and turn the tools back on when live cluster operations are required.
+
+#### **Build a Custom Knowledge Base**
+
+A new guide walks administrators through ingesting internal Git repositories into the Hyperflux knowledge base, so Hyperflux can answer questions grounded in private runbooks, design documents, or other internal references. See [Build a Custom Knowledge Base](../build-custom-kb.mdx).
+
+### Improvements
+
+- Reduced token cost on agent-mode answers when tools return long output (such as logs or large resource definitions).
+- Improved storage performance on the bundled knowledge-base database.
+
+### Breaking Changes
+
+- **Custom knowledge bases built under v1.3.x must be rebuilt before upgrading.** The new embedding model is incompatible with the previous one, so existing custom corpus data will not be usable until rebuilt. See the [Build a Custom Knowledge Base](../build-custom-kb.mdx) guide for the new procedure.
+
+### Known Limitations
+
+- Documents you uploaded via the BYO Knowledge tool are preserved unchanged across the v1.4.0 upgrade — only the bundled product knowledge base is refreshed.
+
 ## v1.3.1
 
 ### Features and Enhancements
