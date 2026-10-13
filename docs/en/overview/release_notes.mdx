@@ -4,6 +4,56 @@ weight: 40
 
 # Release Notes
 
+## v1.6.0
+
+### Features and Enhancements
+
+#### **Reasoning Model Support**
+
+Smart Doc now adapts to reasoning models. A reasoning-effort setting (`minimal`, `low`, `medium`, or `high`) trades reasoning depth for response speed. When the LLM gateway supports the OpenAI Responses API, the chat panel can also show a live reasoning summary while the answer is still being generated. Models that do not support tool calling can be declared as such, so the agent falls back to plain question answering instead of failing.
+
+#### **Per-Model Capability Profiles**
+
+The context window and capabilities of the configured model are now resolved from a per-model profile instead of a fixed table. If the model name is not recognized, or the serving endpoint truncates the context window, administrators can set the model family and context window explicitly.
+
+#### **User Identity Passthrough for External MCP Servers**
+
+External MCP servers can now receive the calling user's ACP identity (user token, user name, cluster, or namespace) on every tool call through a new per-server `forward_headers` field. This keeps tool calls subject to ACP RBAC and makes them attributable in audit logs. The feature is opt-in and off by default.
+
+#### **External MCP Servers from Secrets**
+
+External MCP server lists can now be loaded from Kubernetes Secrets as well as ConfigMaps, so server definitions that contain credentials are no longer readable by anyone with access to ConfigMaps in the namespace. The PostgreSQL connection string is also mounted as a file instead of being passed as an environment variable.
+
+#### **Finer Control over External MCP Tools**
+
+Each external MCP server can now set its own `tool_timeout` and `tool_max_retries`, so slow or non-idempotent tools can be tuned without changing global defaults. A new `read_only_tools` allowlist lets administrators mark specific tools as read-only, so that tools from servers that do not publish tool annotations can be exposed to the agent.
+
+#### **Audit-Log-Aware Troubleshooting**
+
+In troubleshooting and operations mode, the agent can now consult ACP audit logs to find recent changes that may explain a problem.
+
+#### **Improved Skill Selection**
+
+Skills are now matched against the user's question only. More than one skill can be applied in a single turn (configurable, default `1`), and a skill can be marked `always: true` so it is applied on every turn regardless of the question.
+
+### Improvements
+
+- Added a configurable reply language so single-language deployments always answer in the expected language.
+- Exposed the LLM request timeout in the installation configuration and raised its default, so long agent tool chains no longer end mid-loop without an answer.
+- Raised the default maximum number of agent reasoning rounds from 3 to 5.
+- Restored token-usage reporting for streamed agent responses, so per-user quotas and cost accounting include agent-mode traffic.
+- Removed the built-in `node-not-ready` skill.
+
+### Bug Fixes
+
+- Fixed agent turns that could end with only tool-call traces and no answer text on some models.
+- Fixed the agent's intermediate narration and model-internal markup leaking into the chat panel.
+- Fixed interrupted LLM streams leaving the user with no message; a readable error is now shown.
+- Fixed BM25 hybrid search silently falling back to vector-only retrieval because required database extensions were not preloaded.
+- Fixed knowledge base initialization failing after a database image upgrade left a stale collation version.
+- Resolved all outstanding high and critical dependency and image security vulnerabilities.
+
+
 ## v1.5.0
 
 ### Features and Enhancements
