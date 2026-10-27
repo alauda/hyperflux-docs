@@ -4,6 +4,49 @@ weight: 40
 
 # Release Notes
 
+## v1.7.0
+
+### Features and Enhancements
+
+#### **Diagrams in Answers**
+
+The agent can now draw diagrams in its answers. By default it uses Mermaid flowcharts and sequence diagrams when a picture explains the answer better than text, and produces an HTML diagram only when the user asks for one. Administrators can switch the default to HTML, or turn diagrams off, with the `diagramFormat` setting (`mermaid`, `html`, or `none`). Answer HTML is sanitized before it is rendered in the chat panel.
+
+#### **Response Speed Indicators**
+
+Each live answer now shows its time to first token and the model's decoding speed in a footer under the answer. A tooltip breaks the numbers down per LLM call, which makes it easier to tell a slow model from a slow tool chain.
+
+#### **Token Usage Statistics**
+
+Token usage is now recorded per user and per request. Administrators can query daily, weekly, and monthly totals through the `/api/admin/token_usage` endpoint. Usage records are kept for 400 days by default (`tokenUsageRetentionDays`, `0` keeps them forever).
+
+#### **Automatic Session History Cleanup**
+
+Chat sessions with no activity for 90 days are now deleted automatically, together with their messages and summaries. Pinned sessions are never removed. The retention period is configurable with `historyRetentionDays`; set it to `0` to disable cleanup. Deleted sessions cannot be recovered.
+
+#### **Built-in Knowledge Base for ACP 4.4**
+
+The built-in knowledge base now covers ACP 4.4, and new installations use it by default. Smart Doc records which knowledge base dump was restored and restores it again when the configured dump changes. On fresh installations, the dump is restored into a staging area and verified before it is put into service, so an interrupted restore no longer leaves a partial knowledge base behind.
+
+#### **Custom LLM Request Parameters**
+
+A new `llmExtraBody` setting adds a JSON object to every LLM request. Use it for model-specific options that Smart Doc does not expose directly, such as turning off thinking on reasoning models that support it.
+
+### Improvements
+
+- Exposed the number of LLM request retries in the installation configuration (`llmMaxRetries`, default `3`), so short-lived gateway errors such as HTTP 503 no longer end the conversation.
+- The instruction that asks the model to finish its answer is now delivered in the form each model family accepts, improving final answers on Qwen3, DeepSeek, and GLM models.
+- The Hyperflux plugin is now registered in the platform's Agent catalog.
+
+### Bug Fixes
+
+- Fixed the chat panel disconnecting with "Network abnormal" when the model stayed silent for more than 60 seconds; the server now sends heartbeats at a fixed interval while waiting.
+- Fixed answers being lost on Qwen3 models whose strict chat template rejected the final-answer instruction with HTTP 400.
+- Fixed BM25 hybrid search silently falling back to vector-only retrieval when the question contained query syntax such as `site:`, colons, or brackets.
+- Fixed the MCP server TLS and ingress settings in the installation configuration being ignored.
+- Fixed ACP API calls failing with HTTP 500 when the API server's certificate chain lacks an Authority Key Identifier extension.
+- Resolved all outstanding high and critical dependency and image security vulnerabilities.
+
 ## v1.6.0
 
 ### Features and Enhancements
