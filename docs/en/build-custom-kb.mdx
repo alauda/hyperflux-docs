@@ -4,7 +4,7 @@ weight: 17
 
 # Build a Custom Knowledge Base
 
-The Alauda Hyperflux plugin ships with a built-in **system knowledge base** covering Alauda Container Platform
+The Alauda Hyperflux Cluster Plugin ships with a built-in **system knowledge base** covering Alauda Container Platform
 (ACP) and Alauda product documentation. Alongside it, Hyperflux maintains a separate **user knowledge base**
 that you can fill with your own content — internal runbooks, SRE playbooks, design documents, versions of
 Alauda product docs that don't ship in the bundled corpus, or any other private Git repositories. Hyperflux
@@ -18,14 +18,14 @@ in v1.3.1 — same destination, different entry point.)
 The workflow runs **inside the deployed `smart-doc` pod**. The image already contains the builder source,
 the embedding model, and the right Python environment, and the pod already has connectivity to the user
 knowledge-base PostgreSQL. You only need a manifest of repositories to ingest and `kubectl exec` access to
-the global cluster.
+the `global` cluster.
 
 ## How the embedding pipeline works
 
 The smart-doc builder turns a list of Git repositories into a vectorised knowledge base in two stages:
 
 1. **Prepare** — clone the repos, split each `.md` / `.mdx` document by heading and chunk size, then call an LLM
-   (the same one already configured for the running Hyperflux plugin) to generate a one-paragraph summary and
+   (the same one already configured for the running Hyperflux Cluster Plugin) to generate a one-paragraph summary and
    a few representative questions per document. Output: `documents.json`.
 2. **Embed** — load the `gte-multilingual-base` embedding model, embed both the chunks and the per-document
    summaries, and write them to the user-knowledge-base PostgreSQL (`docvec_user_kb`) under the collection
@@ -41,7 +41,7 @@ restart. The system knowledge base is untouched.
 
 ## Prerequisites
 
-- `kubectl` access to the cluster running Hyperflux (the global cluster) with `exec` permission on the
+- `kubectl` access to the cluster running Hyperflux (the `global` cluster) with `exec` permission on the
   `smart-doc` pod in the `cpaas-system` namespace.
 - **Read access** to every Git repository you want to ingest. If they are private, have an HTTPS user/token
   pair ready.
