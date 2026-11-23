@@ -70,18 +70,18 @@
       "updated_at": "2026-05-16T10:38:10Z"
     },
     "docs/en/setup-onprem-rerank.mdx": {
-      "sha256": "e7e48763a5e27c0c83dca9a8f6fcc3304e2f1c0bbaf9d07509944ed82beb5725",
-      "size": 3235,
+      "sha256": "f0f4b54c4a9f84d2656a31c075d3643f2c02659d83d5bdffdc8e3def1bd64691",
+      "size": 3237,
       "description": "Procedure for standing up an on-premise reranker for Hyperflux using Alauda AI and vLLM (runtime `>=vllm-0.9.2-cuda-12.6-x86`), e.g. with the `Alibaba-NLP/gte-reranker-modernbert-base` model. Walks through uploading the model, switching the InferenceService YAML editor to override `spec.model.command` with a `vllm serve ${MODEL_PATH} --task score --port 8080` startup script (including GPU count check, single-file GGUF detection, and `ENABLE_CHUNKED_PREFILL` / `ENFORCE_EAGER` flag handling), exposing it across clusters via NodePort/Ingress/AI Gateway, and pointing Hyperflux at it by editing the Cohere Reranker BaseUrl, Model, and (placeholder) API key fields before the smart-doc container restarts.",
       "generation_method": "ai_agent_reading",
-      "updated_at": "2026-05-16T10:38:10Z"
+      "updated_at": "2026-11-23T18:12:17Z"
     },
     "docs/en/upgrade/index.mdx": {
-      "sha256": "b55fdde78ea2b9d1c9ad516525c0e348ad8b4566b06787dcf2ce81ba855ce990",
-      "size": 3117,
-      "description": "Upgrade runbook for Alauda Hyperflux. Standard path: upload the new plugin tarball under Administrator / Marketplace / Upload Packages, wait 10-15 minutes for sync, then trigger upgrade from Administrator / Clusters / Clusters under the cluster's Features tab on the Hyperflux plugin card. Special-cases the v1.2.0 to v1.2.1 jump, which re-initializes the knowledge base and therefore requires a manual `pg_dump -F c` backup from the `postgre-vec` pod to `hyperflux_backup.dump`, the standard plugin upgrade, then `pg_restore` plus an optional `kubectl edit configmap smart-doc-config` to update `PG_CONN_DB` and `PG_COLLECTION_NAME`.",
+      "sha256": "8fd4029c5eeb71262c4078e350de22eeb34038134900fd495e74844139b91bd0",
+      "size": 3141,
+      "description": "Upgrade runbook for Alauda Hyperflux. Standard path: upload the new plugin tarball under Administrator / Marketplace / Upload Packages, wait 10-15 minutes for sync, then trigger upgrade from Administrator / Clusters / Clusters under the cluster's Features tab on the Hyperflux Cluster Plugin card. Special-cases the v1.2.0 to v1.2.1 jump, which re-initializes the knowledge base and therefore requires a manual `pg_dump -F c` backup from the `postgre-vec` pod to `hyperflux_backup.dump`, the standard plugin upgrade, then `pg_restore` plus an optional `kubectl edit configmap smart-doc-config` to update `PG_CONN_DB` and `PG_COLLECTION_NAME`.",
       "generation_method": "ai_agent_reading",
-      "updated_at": "2026-05-16T10:38:10Z"
+      "updated_at": "2026-11-23T18:12:17Z"
     }
   }
 }
