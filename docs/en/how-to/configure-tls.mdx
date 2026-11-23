@@ -27,7 +27,7 @@ fail with `CERTIFICATE_VERIFY_FAILED`. Add the CA certificate to the trust bundl
    ```
 
 2. In **Administrator / Marketplace / Cluster Plugins**, install or update the
-   `Alauda Hyperflux` plugin and add the ConfigMap name under **Extra CA ConfigMaps**.
+   `Alauda Hyperflux` Cluster Plugin and add the ConfigMap name under **Extra CA ConfigMaps**.
    The service restarts automatically.
 
 Each listed ConfigMap is mounted read-only at `/opt/extra-ca/<configmap-name>/`. At startup the
