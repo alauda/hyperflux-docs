@@ -25,7 +25,7 @@ kubectl -n cpaas-system cp <postgre-vec-xxx>:/tmp/hyperflux_backup.dump ./hyperf
 
 ## Upgrade steps
 
-Upgrading Alauda Hyperflux uses the same process as installing a cluster plugin in ACP:
+Upgrading Alauda Hyperflux uses the same process as installing a Cluster Plugin in ACP:
 
 1. Upload the new version of the plugin package to ACP Marketplace.
     Upload the new version package in the same way as the initial installation.
@@ -33,15 +33,15 @@ Upgrading Alauda Hyperflux uses the same process as installing a cluster plugin 
 2. Verify that the new version is available in the Marketplace.
     Enter **Administrator / Marketplace / Upload Packages** in the console.
     Switch to the **Cluster Plugin** tab.
-    Confirm that the new version number is displayed in the details of the Hyperflux plugin.
+    Confirm that the new version number is displayed in the details of the Hyperflux Cluster Plugin.
 3. Execute the upgrade operation on the cluster where Hyperflux is installed.
     Navigate to **Administrator / Clusters / Clusters**.
-    Find the cluster where the Hyperflux plugin is installed, and an upgrade icon will be displayed in the cluster entry.
+    Find the cluster where the Hyperflux Cluster Plugin is installed, and an upgrade icon will be displayed in the cluster entry.
     Click to enter the details page of that cluster, and switch to the **Features** tab.
-    On the component card corresponding to the Hyperflux plugin, click the **Upgrade** button.
+    On the component card corresponding to the Hyperflux Cluster Plugin, click the **Upgrade** button.
     Confirm the upgrade in the pop-up confirmation dialog, and the system will automatically perform the component upgrade operation.
 4. Verify the upgrade result.
-    After the upgrade is complete, check the **Features** tab of the cluster to confirm that the version number of the Hyperflux plugin has been updated.
+    After the upgrade is complete, check the **Features** tab of the cluster to confirm that the version number of the Hyperflux Cluster Plugin has been updated.
     You can verify its normal operation through plugin status monitoring or log checking.
 
 ## Post-upgrade steps
