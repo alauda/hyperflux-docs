@@ -72,13 +72,13 @@ for one way to deploy this with Alauda AI + vLLM.
 > container restores the selected dump on first startup automatically. See [Build a Custom Knowledge Base](build-custom-kb.mdx)
 > if you want to add or replace the bundled corpus with your own internal documentation.
 
-## Install Alauda Hyperflux cluster plugin
+## Install Alauda Hyperflux Cluster Plugin
 
 Go to **Administrator / Marketplace / Cluster Plugins** page,
 select "global" cluster from the cluster dropdown list,
-then find the `Alauda Hyperflux` plugin and click **Install**.
+then find the `Alauda Hyperflux` Cluster Plugin and click **Install**.
 
-> **NOTE:** Alauda Hyperflux **MUST** be installed in the `Global` cluster.
+> **NOTE:** Alauda Hyperflux **MUST** be installed in the `global` cluster.
 
 The install form is grouped below by topic. Required fields are marked **(required)**.
 
@@ -141,7 +141,7 @@ The install form is grouped below by topic. Required fields are marked **(requir
 - The bundled `acp-mcp-server` deployment itself is controlled by `smartdoc.enableMCPServer` (defaults to `true`); leave it on whenever Agent Mode is on.
 
 > **NOTE:** Earlier versions required setting an "MCP K8s API Server Address" (the `erebus` URL). That field has been
-> removed in v1.4.0 — the bundled `acp-mcp-server` now talks to the cluster directly inside the global cluster, and
+> removed in v1.4.0 — the bundled `acp-mcp-server` now talks to the cluster directly inside the `global` cluster, and
 > external traffic is routed through the Ingress.
 
 ### Retrieval (RAG) tuning
